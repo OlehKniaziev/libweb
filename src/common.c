@@ -1,21 +1,21 @@
 #include "common.h"
 #include <fcntl.h>
 
-static arena TempArena;
+static __thread web_arena TempArena;
 
 #define TEMP_ARENA_CAPACITY (4l * 1024l * 1024l)
 
-arena *GetTempArena(void) {
+web_arena *WebGetTempArena(void) {
     if (TempArena.Items == NULL) {
-        ArenaInit(&TempArena, TEMP_ARENA_CAPACITY);
+        WebArenaInit(&TempArena, TEMP_ARENA_CAPACITY);
     } else {
-        ArenaReset(&TempArena);
+        WebArenaReset(&TempArena);
     }
 
     return &TempArena;
 }
 
-b32 ReadFullFile(arena *Arena, const char *Path, string_view *OutContents) {
+b32 WebReadFullFile(web_arena *Arena, const char *Path, web_string_view *OutContents) {
     int Fd = open(Path, O_RDONLY);
     if (Fd == -1) return 0;
 
@@ -34,7 +34,7 @@ b32 ReadFullFile(arena *Arena, const char *Path, string_view *OutContents) {
     return 1;
 }
 
-u64 HashFnv1(string_view Input) {
+u64 WebHashFnv1(web_string_view Input) {
     const u64 FnvOffsetBasis = 0xCBF29CE484222325;
     const u64 FnvPrime = 0x100000001B3;
 

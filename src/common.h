@@ -131,12 +131,15 @@ static inline web_string_view WebArenaFormat(web_arena *Arena, const char *Fmt, 
     ++BytesNeeded; // NOTE(oleh): Null terminator.
     va_end(Args);
 
-    u8 *Buffer = ArenaPush(Arena, BytesNeeded);
+    u8 *Buffer = (u8 *)ArenaPush(Arena, BytesNeeded);
     va_start(Args, Fmt);
     vsprintf((char *)Buffer, Fmt, Args);
     va_end(Args);
 
-    return (web_string_view) {.Items = Buffer, .Count = BytesNeeded - 1};
+    web_string_view Result;
+    Result.Items = Buffer;
+    Result.Count = BytesNeeded - 1;
+    return Result;
 }
 
 static inline void *WebArenaRealloc(web_arena *Arena, void *OldPtr, uz OldSize, uz NewSize) {
@@ -162,7 +165,7 @@ web_arena *WebGetTempArena(void);
 #define WEB_ARENA_NEW(Arena, Type) ((Type *)WEB_MEMORY_ZERO(ArenaPush((Arena), sizeof(Type)), sizeof(Type)))
 
 static inline char *WebStringViewCloneCStr(web_arena *Arena, web_string_view Sv) {
-    char *Buffer = ArenaPush(Arena, Sv.Count + 1);
+    char *Buffer = (char *)ArenaPush(Arena, Sv.Count + 1);
     memcpy(Buffer, Sv.Items, Sv.Count);
     Buffer[Sv.Count] = '\0';
     return Buffer;

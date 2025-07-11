@@ -199,7 +199,7 @@ static b32 JsonParseValue(web_arena *Arena, web_string_view Input, uz *Position,
                 break;
             }
 
-        ParseElement:
+        ParseElement: ;
             web_json_value Element;
             if (!JsonParseValue(Arena, Input, Position, &Element)) return 0;
 

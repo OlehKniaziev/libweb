@@ -31,7 +31,7 @@ b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_reque
     // Failed to parse the HTTP method.
     return 0;
 
- RequestMethodSuccess:
+ RequestMethodSuccess: ;
     // 1.2. Request URI. (https://datatracker.ietf.org/doc/html/rfc2616#section-5.1.2)
     // FIXME(oleh): Actually parse URI's.
 

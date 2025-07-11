@@ -42,6 +42,10 @@
 
 #define WEB_TODO() WEB_TODO_MSG("NOT IMPLEMENTED")
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
@@ -206,5 +210,9 @@ typedef struct {
     b8 HasValue;
     u32 Value;
 } optional_u32;
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // COMMON_H_

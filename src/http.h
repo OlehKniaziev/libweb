@@ -3,6 +3,10 @@
 
 #include "common.h"
 
+#ifdef __cplusplus
+    extern "C" {
+#endif
+
 // NOTE(oleh): https://datatracker.ietf.org/doc/html/rfc2616#section-5.1.1
 #define ENUM_HTTP_METHODS                   \
     X(OPTIONS)                              \
@@ -83,5 +87,9 @@ void WebHttpResponseWrite(web_http_response_context *, web_string_view);
 
 void WebHttpServerStart(web_http_server *Server, u16 Port);
 void WebHttpServerAttachHandler(web_http_server *Server, const char *Path, web_http_request_handler WebHandler);
+
+#ifdef __cplusplus
+    }
+#endif
 
 #endif // HTTP_H_

@@ -3,6 +3,10 @@
 
 #include "common.h"
 
+#ifdef __cplusplus
+    extern "C" {
+#endif
+
 typedef enum {
     JSON_NUMBER,
     JSON_STRING,
@@ -87,5 +91,9 @@ web_string_view WebJsonEnd(void);
 // Aliases for entity-type serializers.
 
 #define JsonPut_string_view JsonPutString
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // JSON_H_

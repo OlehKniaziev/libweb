@@ -47,6 +47,20 @@ b32 WebJsonParse(web_arena *Arena, web_string_view Input, web_json_value *OutVal
 
 b32 WebJsonObjectGet(const web_json_object *Object, web_string_view Key, web_json_value *OutValue);
 
+static inline b32 WebJsonObjectGetStringView(const web_json_object *Object, web_string_view Key, web_string_view *OutValue) {
+    web_json_value OutJsonValue;
+    if (!WebJsonObjectGet(Object, Key, &OutJsonValue)) {
+        return 0;
+    }
+
+    if (OutJsonValue.Type == JSON_STRING) {
+        *OutValue = OutJsonValue.String;
+        return 1;
+    }
+
+    return 0;
+}
+
 #define WEB_ENUM_JSON_GETTERS \
     X(web_string_view) \
         X(f64) \
@@ -56,6 +70,8 @@ b32 WebJsonObjectGet(const web_json_object *Object, web_string_view Key, web_jso
 #define X(Type) b32 WebJsonObjectGet_##Type(const web_json_object *Object, web_string_view Key, Type *OutValue);
 WEB_ENUM_JSON_GETTERS
 #undef X
+
+#define WebJsonObjectGet_web_string_view WebJsonObjectGetStringView
 
 #define OPTIONAL_GETTER(Type) \
     static inline b32 WebJsonObjectGet_optional_##Type(const web_json_object *Object, web_string_view Key, optional_##Type *OutValue) { \

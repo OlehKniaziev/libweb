@@ -89,7 +89,9 @@ void WebHttpResponseWrite(web_http_response_context *, web_string_view);
 void WebHttpServerStart(web_http_server *Server, u16 Port);
 void WebHttpServerAttachHandler(web_http_server *Server, const char *Path, web_http_request_handler WebHandler);
 
-b32 WebHttpContextParseJsonBody(web_http_response_context *, web_json_value *);
+static inline b32 WebHttpContextParseJsonBody(web_http_response_context *Ctx, web_json_value *OutValue) {
+    return WebJsonParse(Ctx->Arena, Ctx->Request.Body, OutValue);
+}
 
 #ifdef __cplusplus
     }

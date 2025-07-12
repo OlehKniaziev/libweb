@@ -53,13 +53,13 @@ b32 WebJsonObjectGet(const web_json_object *Object, web_string_view Key, web_jso
         X(u64) \
         X(u32)
 
-#define X(Type) b32 JsonObjectGet_##Type(const web_json_object *Object, web_string_view Key, Type *OutValue);
+#define X(Type) b32 WebJsonObjectGet_##Type(const web_json_object *Object, web_string_view Key, Type *OutValue);
 ENUM_JSON_GETTERS
 #undef X
 
 #define OPTIONAL_GETTER(Type) \
-    static inline b32 JsonObjectGet_optional_##Type(const web_json_object *Object, web_string_view Key, optional_##Type *OutValue) { \
-        OutValue->HasValue = JsonObjectGet_##Type(Object, Key, &OutValue->Value); \
+    static inline b32 WebJsonObjectGet_optional_##Type(const web_json_object *Object, web_string_view Key, optional_##Type *OutValue) { \
+        OutValue->HasValue = WebJsonObjectGet_##Type(Object, Key, &OutValue->Value); \
         return 1;                                                       \
     }
 

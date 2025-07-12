@@ -47,14 +47,14 @@ b32 WebJsonParse(web_arena *Arena, web_string_view Input, web_json_value *OutVal
 
 b32 WebJsonObjectGet(const web_json_object *Object, web_string_view Key, web_json_value *OutValue);
 
-#define ENUM_JSON_GETTERS \
+#define WEB_ENUM_JSON_GETTERS \
     X(web_string_view) \
         X(f64) \
         X(u64) \
         X(u32)
 
 #define X(Type) b32 WebJsonObjectGet_##Type(const web_json_object *Object, web_string_view Key, Type *OutValue);
-ENUM_JSON_GETTERS
+WEB_ENUM_JSON_GETTERS
 #undef X
 
 #define OPTIONAL_GETTER(Type) \
@@ -64,8 +64,9 @@ ENUM_JSON_GETTERS
     }
 
 #define X OPTIONAL_GETTER
-ENUM_JSON_GETTERS
+WEB_ENUM_JSON_GETTERS
 #undef X
+#undef OPTIONAL_GETTER
 
 void WebJsonBegin(web_arena *);
 

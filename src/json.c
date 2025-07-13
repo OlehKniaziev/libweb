@@ -1,3 +1,5 @@
+#include <math.h>
+
 #include "json.h"
 
 typedef struct {
@@ -393,6 +395,51 @@ void WebJsonPutKey(web_string_view Key) {
         Ptr[Key.Count + 3] = ':';
     }
 
+    CurrentJsonArena->Offset += BytesRequired;
+}
+
+static void WebJsonPutSpecial(web_string_view Special) {
+    uz BytesRequired = Special.Count;
+    WEB_ASSERT(CurrentJsonArena->Capacity - CurrentJsonArena->Offset >= BytesRequired);
+
+    u8 *Ptr = CurrentJsonArena->Items + CurrentJsonArena->Offset;
+    memcpy(Ptr, Special.Items, Special.Count);
+
+    CurrentJsonState = STATE_DIRTY;
+    CurrentJsonArena->Offset += BytesRequired;
+}
+
+void WebJsonPutTrue(void) {
+    WebJsonPutSpecial(WEB_SV_LIT("true"));
+}
+
+void WebJsonPutFalse(void) {
+    WebJsonPutSpecial(WEB_SV_LIT("false"));
+}
+
+void WebJsonPutNull(void) {
+    WebJsonPutSpecial(WEB_SV_LIT("null"));
+}
+
+void WebJsonPutNumber(f64 Number) {
+    web_arena *TempArena = WebGetTempArena();
+
+    web_string_view NumberString;
+    f64 Integral;
+    f64 Fractional = modf(Number, &Integral);
+    if (Fractional == 0.0 || Fractional == -0.0) {
+        NumberString = WebArenaFormat(TempArena, "%lld", (s64)Number);
+    } else {
+        NumberString = WebArenaFormat(TempArena, "%f", Number);
+    }
+
+    uz BytesRequired = NumberString.Count;
+    WEB_ASSERT(CurrentJsonArena->Capacity - CurrentJsonArena->Offset >= BytesRequired);
+
+    u8 *Ptr = CurrentJsonArena->Items + CurrentJsonArena->Offset;
+    memcpy(Ptr, NumberString.Items, NumberString.Count);
+
+    CurrentJsonState = STATE_DIRTY;
     CurrentJsonArena->Offset += BytesRequired;
 }
 

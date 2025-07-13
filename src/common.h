@@ -100,12 +100,12 @@ typedef struct {
     uz Offset;
 } web_arena;
 
-static inline uz AlignForward(uz Size, uz Alignment) {
+static inline uz WebAlignForward(uz Size, uz Alignment) {
     return Size + ((Alignment - (Size & (Alignment - 1))) & (Alignment - 1));
 }
 
-static inline void *ArenaPush(web_arena *Arena, uz Size) {
-    Size = AlignForward(Size, sizeof(uz));
+static inline void *WebArenaPush(web_arena *Arena, uz Size) {
+    Size = WebAlignForward(Size, sizeof(uz));
     uz AvailableBytes = Arena->Capacity - Arena->Offset;
     if (AvailableBytes < Size) WEB_PANIC_FMT("Arena out of memory for requested size %zu!", Size);
 
@@ -115,7 +115,7 @@ static inline void *ArenaPush(web_arena *Arena, uz Size) {
     return Ptr;
 }
 
-#define WEB_ARENA_PUSH_ZERO(Arena, Size) (WEB_MEMORY_ZERO(ArenaPush((Arena), (Size)), (Size)))
+#define WEB_ARENA_PUSH_ZERO(Arena, Size) (WEB_MEMORY_ZERO(WebArenaPush((Arena), (Size)), (Size)))
 
 static inline void WebArenaInit(web_arena *Arena, uz Capacity) {
     Arena->Capacity = Capacity;
@@ -131,7 +131,7 @@ static inline web_string_view WebArenaFormat(web_arena *Arena, const char *Fmt, 
     ++BytesNeeded; // NOTE(oleh): Null terminator.
     va_end(Args);
 
-    u8 *Buffer = (u8 *)ArenaPush(Arena, BytesNeeded);
+    u8 *Buffer = (u8 *)WebArenaPush(Arena, BytesNeeded);
     va_start(Args, Fmt);
     vsprintf((char *)Buffer, Fmt, Args);
     va_end(Args);
@@ -144,12 +144,12 @@ static inline web_string_view WebArenaFormat(web_arena *Arena, const char *Fmt, 
 
 static inline void *WebArenaRealloc(web_arena *Arena, void *OldPtr, uz OldSize, uz NewSize) {
     if (Arena->LastAlloc == OldPtr) {
-        OldSize = AlignForward(OldSize, sizeof(uz));
-        NewSize = AlignForward(NewSize, sizeof(uz));
+        OldSize = WebAlignForward(OldSize, sizeof(uz));
+        NewSize = WebAlignForward(NewSize, sizeof(uz));
         sz Diff = (sz)NewSize - (sz)OldSize;
         Arena->Offset += Diff;
     }
-    void* NewPtr = ArenaPush(Arena, NewSize);
+    void* NewPtr = WebArenaPush(Arena, NewSize);
     memcpy(NewPtr, OldPtr, OldSize);
     return NewPtr;
 }
@@ -162,10 +162,10 @@ static inline void WebArenaReset(web_arena *Arena) {
 
 web_arena *WebGetTempArena(void);
 
-#define WEB_ARENA_NEW(Arena, Type) ((Type *)WEB_MEMORY_ZERO(ArenaPush((Arena), sizeof(Type)), sizeof(Type)))
+#define WEB_ARENA_NEW(Arena, Type) ((Type *)WEB_MEMORY_ZERO(WebArenaPush((Arena), sizeof(Type)), sizeof(Type)))
 
 static inline char *WebStringViewCloneCStr(web_arena *Arena, web_string_view Sv) {
-    char *Buffer = (char *)ArenaPush(Arena, Sv.Count + 1);
+    char *Buffer = (char *)WebArenaPush(Arena, Sv.Count + 1);
     memcpy(Buffer, Sv.Items, Sv.Count);
     Buffer[Sv.Count] = '\0';
     return Buffer;

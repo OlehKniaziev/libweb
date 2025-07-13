@@ -108,7 +108,7 @@ b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_reque
         web_string_view HeaderValue = {.Items = Buffer.Items + I + 2, .Count = I - HeaderValueStart - 2};
 
         RequestHeadersItems[RequestHeadersCount] = (web_http_header) {.Name = HeaderName, .Value = HeaderValue};
-        ArenaPush(Arena, sizeof(web_http_header));
+        WebArenaPush(Arena, sizeof(web_http_header));
         ++RequestHeadersCount;
 
         ++I;
@@ -214,7 +214,7 @@ void WebHttpServerStart(web_http_server *Server, u16 Port) {
 
         web_string_view ParseBuffer = {.Items = RequestArena.Items, .Count = ReceivedBytesCount};
 
-        RequestArena.Offset = AlignForward(ReceivedBytesCount, sizeof(uz));
+        RequestArena.Offset = WebAlignForward(ReceivedBytesCount, sizeof(uz));
 
         web_http_request HttpRequest;
         b32 Success = WebHttpRequestParse(&RequestArena, ParseBuffer, &HttpRequest);
@@ -290,8 +290,8 @@ void WebHttpServerAttachHandler(web_http_server *Server, const char *Path, web_h
 void WebHttpServerInit(web_http_server *Server) {
     WebArenaInit(&Server->Arena, HTTP_SERVER_ARENA_CAPACITY);
 
-    Server->Handlers = ArenaPush(&Server->Arena, sizeof(*Server->Handlers) * HTTP_SERVER_MAX_HANDLERS);
-    Server->HandlersPaths = ArenaPush(&Server->Arena, sizeof(*Server->HandlersPaths) * HTTP_SERVER_MAX_HANDLERS);
+    Server->Handlers = WebArenaPush(&Server->Arena, sizeof(*Server->Handlers) * HTTP_SERVER_MAX_HANDLERS);
+    Server->HandlersPaths = WebArenaPush(&Server->Arena, sizeof(*Server->HandlersPaths) * HTTP_SERVER_MAX_HANDLERS);
 
     Server->HandlersCount = 0;
 }

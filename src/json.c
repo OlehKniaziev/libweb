@@ -331,7 +331,7 @@ void WebJsonBegin(web_arena *Arena) {
 web_string_view WebJsonEnd(void) {
     uz JsonCount = CurrentJsonArena->Offset - CurrentJsonStart;
     web_string_view Result = {.Items = CurrentJsonArena->Items + CurrentJsonStart, .Count = JsonCount};
-    CurrentJsonArena->Offset = AlignForward(CurrentJsonArena->Offset, sizeof(uz));
+    CurrentJsonArena->Offset = WebAlignForward(CurrentJsonArena->Offset, sizeof(uz));
     return Result;
 }
 

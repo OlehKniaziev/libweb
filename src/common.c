@@ -22,7 +22,7 @@ b32 WebReadFullFile(web_arena *Arena, const char *Path, web_string_view *OutCont
     off_t FileSize = lseek(Fd, 0, SEEK_END);
     lseek(Fd, 0, SEEK_SET);
 
-    u8 *ContentsBuffer = ArenaPush(Arena, FileSize);
+    u8 *ContentsBuffer = WebArenaPush(Arena, FileSize);
     ssize_t BytesRead = read(Fd, ContentsBuffer, FileSize);
     if (BytesRead == -1) return 0;
 

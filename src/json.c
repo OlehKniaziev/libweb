@@ -160,6 +160,12 @@ static f64 ParseF64(web_string_view Buffer) {
 
     if (Buffer.Items[0] == '-') {
         return (f64)-(s64)Result;
+    } else if (Buffer.Items[0] == '+') {
+        return (f64)Result;
+    } else if (Buffer.Count == 1) {
+        u8 Char = Buffer.Items[0];
+        WEB_ASSERT(Char >= '0' && Char <= '9');
+        return (f64)(Char - '0');
     }
 
     return (f64)Result;

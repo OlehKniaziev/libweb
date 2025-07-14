@@ -42,6 +42,9 @@
 
 #define WEB_TODO() WEB_TODO_MSG("NOT IMPLEMENTED")
 
+#define WEB_MIN(a, b) ((a) < (b) ? (a) : (b))
+#define WEB_MAX(a, b) ((a) > (b) ? (a) : (b))
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -71,6 +74,12 @@ typedef struct {
     u8 *Items;
     uz Count;
 } web_string_view;
+
+typedef struct {
+    u8 *Items;
+    uz Count;
+    uz Capacity;
+} web_dynamic_string;
 
 static inline b32 WebStringViewEqualCStr(web_string_view Sv, const char *CStr) {
     uz CStrLength = strlen(CStr);
@@ -192,6 +201,14 @@ b32 WebReadFullFile(web_arena *Arena, const char *Path, web_string_view *OutCont
         ++(Array)->Count;                                               \
     } while (0)
 
+// TODO(oleh): Since we know the number of elements in the Rhs array, we can first reserve an
+// exact amount of memory needed for insertion of all of them.
+#define WEB_ARRAY_EXTEND(Arena, Lhs, Rhs) do { \
+    for (uz I = 0; I < (Rhs)->Count; ++I) { \
+    WEB_ARRAY_PUSH((Arena), (Lhs), (Rhs)->Items[I]); \
+    } \
+    } while (0)
+
 u64 WebHashFnv1(web_string_view Input);
 
 typedef struct {
@@ -213,6 +230,8 @@ typedef struct {
     b8 HasValue;
     u32 Value;
 } optional_u32;
+
+b32 WebParseS64(web_string_view, s64 *);
 
 #ifdef __cplusplus
 }

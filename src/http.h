@@ -9,7 +9,7 @@
 #endif
 
 // NOTE(oleh): https://datatracker.ietf.org/doc/html/rfc2616#section-5.1.1
-#define ENUM_HTTP_METHODS                   \
+#define WEB_ENUM_HTTP_METHODS               \
     X(OPTIONS)                              \
     X(GET)                                  \
     X(POST)                                 \
@@ -20,7 +20,7 @@
 
 typedef enum {
 #define X(method) HTTP_##method,
-    ENUM_HTTP_METHODS
+    WEB_ENUM_HTTP_METHODS
 #undef X
 } web_http_method;
 
@@ -35,14 +35,28 @@ typedef struct {
     uz Capacity;
 } web_http_headers;
 
-#define ENUM_HTTP_VERSIONS \
+#define WEB_ENUM_HTTP_VERSIONS \
     X(1_1, "HTTP/1.1")
 
 typedef enum {
 #define X(Version, String) HTTP_##Version,
-ENUM_HTTP_VERSIONS
+WEB_ENUM_HTTP_VERSIONS
 #undef X
 } web_http_version;
+
+#define WEB_ENUM_HTTP_RESPONSE_STATUSES                         \
+        X(OK, 200, "OK")                                        \
+        X(BAD_REQUEST, 400, "Bad Request")                      \
+        X(FORBIDDEN, 403, "Forbidden")                          \
+        X(NOT_FOUND, 404, "Not Found")                          \
+        X(METHOD_NOT_ALLOWED, 405, "Method Not Allowed")        \
+        X(INTERNAL_SERVER_ERROR, 500, "Internal Server Error")  \
+
+typedef enum {
+#define X(Status, Code, _Phrase) HTTP_STATUS_##Status = Code,
+    WEB_ENUM_HTTP_RESPONSE_STATUSES
+#undef X
+} web_http_response_status;
 
 typedef struct {
     web_http_method Method;
@@ -52,21 +66,21 @@ typedef struct {
     web_string_view Body;
 } web_http_request;
 
+typedef struct {
+    web_http_version Version;
+    web_http_response_status Status;
+    web_http_headers Headers;
+    web_string_view Body;
+} web_http_response;
+
 b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_request *Out);
+b32 WebHttpRequestSend(web_arena *Arena,
+                       web_string_view Hostname,
+                       u16 Port,
+                       web_http_request Request,
+                       web_http_response *Response);
 
-#define ENUM_HTTP_RESPONSE_STATUSES                             \
-    X(OK, 200, "OK")                                            \
-        X(BAD_REQUEST, 400, "Bad Request")                      \
-        X(FORBIDDEN, 403, "Forbidden")                      \
-        X(NOT_FOUND, 404, "Not Found")                          \
-        X(METHOD_NOT_ALLOWED, 405, "Method Not Allowed")        \
-        X(INTERNAL_SERVER_ERROR, 500, "Internal Server Error")  \
-
-typedef enum {
-#define X(Status, Code, _Phrase) HTTP_STATUS_##Status = Code,
-    ENUM_HTTP_RESPONSE_STATUSES
-#undef X
-} web_http_response_status;
+b32 WebHttpResponseParse(web_arena *Arena, web_string_view Buffer, web_http_response *OutResponse);
 
 typedef struct {
     web_arena *Arena;

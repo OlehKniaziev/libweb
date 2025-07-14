@@ -1,4 +1,6 @@
 #include "common.h"
+
+#include <ctype.h>
 #include <fcntl.h>
 
 static __thread web_arena TempArena;
@@ -48,4 +50,28 @@ u64 WebHashFnv1(web_string_view Input) {
     }
 
     return Hash;
+}
+
+b32 WebParseS64(web_string_view Buffer, s64 *Out) {
+    if (Buffer.Count == 0) return 0;
+
+    s64 Result = 0;
+    uz Coef = 1;
+
+    for (sz I = Buffer.Count - 1; I > 0; --I) {
+        u8 Char = Buffer.Items[I];
+        if (!isdigit(Char)) return 0;
+
+        u8 Digit = Char - '0';
+        Result += Digit * Coef;
+        Coef *= 10;
+    }
+
+    if (isdigit(Buffer.Items[0])) Result += (Buffer.Items[0] - '0') * Coef;
+    else if (Buffer.Items[0] == '-') Result = -Result;
+    else return 0;
+
+    *Out = Result;
+
+    return 1;
 }

@@ -6,6 +6,263 @@
 
 #include <errno.h>
 
+static const char *HttpVersionStrings[] = {
+#define X(Version, String) [HTTP_##Version] = String,
+WEB_ENUM_HTTP_VERSIONS
+#undef X
+};
+
+static const char *HttpMethodNames[] = {
+#define X(Method) [HTTP_##Method] = #Method,
+WEB_ENUM_HTTP_METHODS
+#undef X
+};
+
+static void HttpHeadersFormat(web_arena *Arena, web_dynamic_string *String, web_http_headers Headers) {
+    for (uz HeaderIndex = 0; HeaderIndex < Headers.Count; ++HeaderIndex) {
+        web_http_header Header = Headers.Items[HeaderIndex];
+
+        for (uz I = 0; I < Header.Name.Count; ++I) {
+            WEB_ARRAY_PUSH(Arena, String, Header.Name.Items[I]);
+        }
+
+        WEB_ARRAY_PUSH(Arena, String, ':');
+        WEB_ARRAY_PUSH(Arena, String, ' ');
+
+        for (uz I = 0; I < Header.Value.Count; ++I) {
+            WEB_ARRAY_PUSH(Arena, String, Header.Value.Items[I]);
+        }
+
+        WEB_ARRAY_PUSH(Arena, String, '\r');
+        WEB_ARRAY_PUSH(Arena, String, '\n');
+    }
+}
+
+#define WEB_HTTP_RESPONSE_MAX_SIZE (128l * 1024l * 512l)
+
+b32 WebHttpRequestSend(web_arena *ResponseArena,
+                       web_string_view Hostname,
+                       u16 Port,
+                       web_http_request Request,
+                       web_http_response *Response) {
+    web_arena *Temp = WebGetTempArena();
+    b32 Result = 1;
+
+    struct addrinfo Hints = {0};
+    struct addrinfo* ServerAddr = NULL;
+
+    Hints.ai_family = AF_INET;
+    Hints.ai_socktype = SOCK_STREAM;
+    Hints.ai_flags = AI_PASSIVE;
+
+    const char *HostnameCStr = WebStringViewCloneCStr(Temp, Hostname);
+
+    char PortCStr[6] = {0};
+    sprintf(PortCStr, "%hu", Port);
+
+    sz Status = getaddrinfo(HostnameCStr, PortCStr, &Hints, &ServerAddr);
+    if (Status != 0) {
+        // FIXME(oleh): Report an error.
+        printf("ERROR: %s\n", gai_strerror(Status));
+        Result = 0;
+        goto End;
+    }
+
+    int ServerSock = socket(ServerAddr->ai_family, ServerAddr->ai_socktype, 0);
+    if (ServerSock == -1) {
+        // FIXME(oleh): Report an error.
+        Result = 0;
+        goto End;
+    }
+
+    Status = connect(ServerSock, ServerAddr->ai_addr, ServerAddr->ai_addrlen);
+    if (Status != 0) {
+        perror("Connect");
+        Result = 0;
+        goto End;
+    }
+
+    const char *VersionString = HttpVersionStrings[Request.Version];
+    web_string_view VersionSv = WEB_SV_LIT(VersionString);
+
+    const char *MethodString = HttpMethodNames[Request.Method];
+    web_string_view MethodSv = WEB_SV_LIT(MethodString);
+
+    web_dynamic_string RequestString;
+    WEB_ARRAY_INIT(Temp, &RequestString);
+
+    // Request line.
+    WEB_ARRAY_EXTEND(Temp, &RequestString, &MethodSv);
+    WEB_ARRAY_PUSH(Temp, &RequestString, ' ');
+    WEB_ARRAY_EXTEND(Temp, &RequestString, &Request.Path);
+    WEB_ARRAY_PUSH(Temp, &RequestString, ' ');
+    WEB_ARRAY_EXTEND(Temp, &RequestString, &VersionSv);
+    WEB_ARRAY_PUSH(Temp, &RequestString, '\r');
+    WEB_ARRAY_PUSH(Temp, &RequestString, '\n');
+
+    // Headers.
+    HttpHeadersFormat(Temp, &RequestString, Request.Headers);
+    WEB_ARRAY_PUSH(Temp, &RequestString, '\r');
+    WEB_ARRAY_PUSH(Temp, &RequestString, '\n');
+
+    // Body.
+    WEB_ARRAY_EXTEND(Temp, &RequestString, &Request.Body);
+
+    Status = write(ServerSock, RequestString.Items, RequestString.Count);
+    if (Status == -1) {
+        Result = 0;
+        goto End;
+    }
+
+    uz ResponseArenaAvailableMemory = ResponseArena->Capacity - ResponseArena->Offset;
+    uz ResponseBufferCount = WEB_MIN(ResponseArenaAvailableMemory / 16, WEB_HTTP_RESPONSE_MAX_SIZE);
+    u8 *ResponseBuffer = WebArenaPush(ResponseArena, ResponseBufferCount);
+
+    Status = read(ServerSock, ResponseBuffer, ResponseBufferCount);
+    if (Status == -1) {
+        Result = 0;
+        goto End;
+    }
+
+    web_string_view ResponseSv = {
+        .Items = ResponseBuffer,
+        .Count = Status,
+    };
+
+    if (!WebHttpResponseParse(ResponseArena, ResponseSv, Response)) {
+        Result = 0;
+        goto End;
+    }
+
+End:
+    if (ServerAddr != NULL) {
+        freeaddrinfo(ServerAddr);
+    }
+
+    return Result;
+}
+
+// TODO(oleh): This is messy, refactor it.
+static b32 HttpHeadersParse(web_arena *Arena,
+                            web_string_view Buffer,
+                            uz *Offset,
+                            web_http_headers *Headers) {
+    b32 Result = 1;
+    uz I;
+
+    for (I = *Offset; I < Buffer.Count; ++I) {
+        if (Buffer.Items[I] == '\r' && Buffer.Count - I > 1 && Buffer.Items[I + 1] == '\n') goto Success;
+
+        uz HeaderNameStart = I;
+
+        for (; I < Buffer.Count; ++I) {
+            if (Buffer.Items[I] == ':') break;
+        }
+
+        if (I >= Buffer.Count) return 0;
+
+        web_string_view HeaderName = {.Items = Buffer.Items + HeaderNameStart, .Count = I - HeaderNameStart};
+
+        uz HeaderValueStart = I + 1;
+
+        for (I = HeaderValueStart; I < Buffer.Count; ++I) {
+            if (Buffer.Items[I] == '\r') break;
+        }
+
+        if (Buffer.Count - I <= 1) return 0;
+        if (Buffer.Items[I + 1] != '\n') return 0;
+
+        web_string_view HeaderValue = {.Items = Buffer.Items + I + 2, .Count = I - HeaderValueStart - 2};
+
+        web_http_header Header = {.Name = HeaderName, .Value = HeaderValue};
+
+        WEB_ARRAY_PUSH(Arena, Headers, Header);
+        ++I;
+    }
+
+    Result = 0;
+
+Success:
+    *Offset = I + 2;
+
+    return Result;
+}
+
+b32 WebHttpResponseParse(web_arena *Arena, web_string_view Buffer, web_http_response *OutResponse) {
+    // 1. Response line. (https://datatracker.ietf.org/doc/html/rfc2616#section-6.1)
+    // 1.1. Version.
+
+    uz I;
+    for (I = 0; I < Buffer.Count; ++I) {
+        if (Buffer.Items[I] == ' ') break;
+    }
+
+    if (I >= Buffer.Count) return 0;
+
+    web_http_version HttpVersion;
+    web_string_view HttpVersionSv = {.Items = Buffer.Items, .Count = I};
+#define X(Version, VersionString) if (WebStringViewEqualCStr(HttpVersionSv, VersionString)) { \
+    HttpVersion = HTTP_##Version; \
+    goto ResponseVersionSuccess; \
+    }
+WEB_ENUM_HTTP_VERSIONS
+#undef X
+
+    // Failed to parse the version.
+    return 0;
+
+ResponseVersionSuccess: ;
+    uz StatusCodeStart = I + 1;
+
+    for (I = StatusCodeStart; I < Buffer.Count; ++I) {
+        if (Buffer.Items[I] == ' ') break;
+    }
+
+    if (I >= Buffer.Count) return 0;
+
+    s64 StatusCodeNum;
+    web_string_view StatusCodeSv = {.Items = Buffer.Items + StatusCodeStart, .Count = I - StatusCodeStart};
+    if (!WebParseS64(StatusCodeSv, &StatusCodeNum)) return 0;
+
+    web_http_response_status StatusCode;
+
+    uz ReasonStart = I + 1;
+    for (I = ReasonStart; I < Buffer.Count; ++I) {
+        if (Buffer.Items[I] == '\r') break;
+    }
+
+    web_string_view ReasonPhrase = {.Items = Buffer.Items + ReasonStart, .Count = I - ReasonStart};
+
+    ++I;
+    if (I >= Buffer.Count) return 0;
+
+    if (Buffer.Items[I] != '\n') return 0;
+
+    // NOTE(oleh): This reason phrase is not required to be matching the status code, so maybe
+    // we should just not check if it matches?
+#define X(Name, Code, Reason) if (StatusCodeNum == Code && WebStringViewEqualCStr(ReasonPhrase, Reason)) { StatusCode = HTTP_STATUS_##Name; goto ResponseStatusSuccess; }
+WEB_ENUM_HTTP_RESPONSE_STATUSES
+#undef X
+
+    // Failed to parse response status code.
+    return 0;
+ResponseStatusSuccess: ;
+    ++I;
+
+    web_http_headers Headers;
+    WEB_ARRAY_INIT(Arena, &Headers);
+
+    if (!HttpHeadersParse(Arena, Buffer, &I, &Headers)) return 0;
+
+    web_string_view ResponseBody = {.Items = Buffer.Items + I, .Count = Buffer.Count - I};
+
+    OutResponse->Version = HttpVersion;
+    OutResponse->Body = ResponseBody;
+    OutResponse->Status = StatusCode;
+    OutResponse->Headers = Headers;
+    return 1;
+}
+
 b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_request *OutRequest) {
     // 1. Request line. (https://datatracker.ietf.org/doc/html/rfc2616#section-5.1)
     // 1.1. Method. (https://datatracker.ietf.org/doc/html/rfc2616#section-5.1.1)
@@ -24,7 +281,7 @@ b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_reque
         goto RequestMethodSuccess;                                      \
     }
 
-    ENUM_HTTP_METHODS
+    WEB_ENUM_HTTP_METHODS
 
 #undef X
 
@@ -63,7 +320,7 @@ b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_reque
         goto RequestVersionSuccess;                                     \
     }
 
-    ENUM_HTTP_VERSIONS
+    WEB_ENUM_HTTP_VERSIONS
 #undef X
 
     // NOTE(oleh): Failed to recognize the HTTP version.
@@ -80,39 +337,12 @@ b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_reque
     // 2. Headers. (https://datatracker.ietf.org/doc/html/rfc2616#section-5.3)
     // FIXME(oleh): Actually parse the headers according to their specification.
 
-    web_http_header *RequestHeadersItems = WEB_ARENA_NEW(Arena, web_http_header);
-    uz RequestHeadersCount = 0;
+    web_http_headers Headers;
+    WEB_ARRAY_INIT(Arena, &Headers);
 
-    for (I = 0; I < Buffer.Count; ++I) {
-        if (Buffer.Items[I] == '\r' && Buffer.Count - I > 1 && Buffer.Items[I + 1] == '\n') break;
+    I = 0;
 
-        uz HeaderNameStart = I;
-
-        for (; I < Buffer.Count; ++I) {
-            if (Buffer.Items[I] == ':') break;
-        }
-
-        if (I >= Buffer.Count) return 0;
-
-        web_string_view HeaderName = {.Items = Buffer.Items + HeaderNameStart, .Count = I - HeaderNameStart};
-
-        uz HeaderValueStart = I + 1;
-
-        for (I = HeaderValueStart; I < Buffer.Count; ++I) {
-            if (Buffer.Items[I] == '\r') break;
-        }
-
-        if (Buffer.Count - I <= 1) return 0;
-        if (Buffer.Items[I + 1] != '\n') return 0;
-
-        web_string_view HeaderValue = {.Items = Buffer.Items + I + 2, .Count = I - HeaderValueStart - 2};
-
-        RequestHeadersItems[RequestHeadersCount] = (web_http_header) {.Name = HeaderName, .Value = HeaderValue};
-        WebArenaPush(Arena, sizeof(web_http_header));
-        ++RequestHeadersCount;
-
-        ++I;
-    }
+    if (!HttpHeadersParse(Arena, Buffer, &I, &Headers)) return 0;
 
     if (I >= Buffer.Count) return 0;
 
@@ -122,8 +352,7 @@ b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_reque
     OutRequest->Method = RequestMethod;
     OutRequest->Path = RequestPath;
     OutRequest->Version = RequestVersion;
-    OutRequest->Headers.Items = RequestHeadersItems;
-    OutRequest->Headers.Count = RequestHeadersCount;
+    OutRequest->Headers = Headers;
     OutRequest->Body = RequestBody;
 
     return 1;
@@ -132,17 +361,11 @@ b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_reque
 static const char *GetHttpResponseStatusReasonPhrase(web_http_response_status Status) {
     switch (Status) {
 #define X(Status, _Code, Phrase) case HTTP_STATUS_##Status: return Phrase;
-        ENUM_HTTP_RESPONSE_STATUSES
+        WEB_ENUM_HTTP_RESPONSE_STATUSES
 #undef X
     default: WEB_UNREACHABLE();
     }
 }
-
-static const char *HttpVersionStrings[] = {
-#define X(Version, String) [HTTP_##Version] = String,
-    ENUM_HTTP_VERSIONS
-#undef X
-};
 
 #define TCP_BACKLOG_SIZE 256
 
@@ -239,42 +462,17 @@ void WebHttpServerStart(web_http_server *Server, u16 Port) {
             const char *ReasonPhrase = GetHttpResponseStatusReasonPhrase(ResponseStatus);
             const char *VersionString = HttpVersionStrings[HttpRequest.Version];
 
-            struct {
-                u8 *Items;
-                uz Count;
-                uz Capacity;
-            } ResponseHeadersString;
+            web_dynamic_string ResponseHeadersString;
             WEB_ARRAY_INIT(ResponseContext.Arena, &ResponseHeadersString);
 
-            for (uz HeaderIndex = 0; HeaderIndex < ResponseContext.ResponseHeaders.Count; ++HeaderIndex) {
-                web_http_header Header = ResponseContext.ResponseHeaders.Items[HeaderIndex];
-
-                for (uz I = 0; I < Header.Name.Count; ++I) {
-                    WEB_ARRAY_PUSH(ResponseContext.Arena, &ResponseHeadersString, Header.Name.Items[I]);
-                }
-
-                WEB_ARRAY_PUSH(ResponseContext.Arena, &ResponseHeadersString, ':');
-                WEB_ARRAY_PUSH(ResponseContext.Arena, &ResponseHeadersString, ' ');
-
-                for (uz I = 0; I < Header.Value.Count; ++I) {
-                    WEB_ARRAY_PUSH(ResponseContext.Arena, &ResponseHeadersString, Header.Value.Items[I]);
-                }
-
-                WEB_ARRAY_PUSH(ResponseContext.Arena, &ResponseHeadersString, '\r');
-                WEB_ARRAY_PUSH(ResponseContext.Arena, &ResponseHeadersString, '\n');
-            }
-
-            web_string_view ResponseHeaders = {
-                .Items = ResponseHeadersString.Items,
-                .Count = ResponseHeadersString.Count,
-            };
+            HttpHeadersFormat(ResponseContext.Arena, &ResponseHeadersString, ResponseContext.ResponseHeaders);
 
             web_string_view ResponseString = WebArenaFormat(&RequestArena,
                                                             "%s %u %s\r\nAccess-Control-Allow-Origin: *\r\n" WEB_SV_FMT "\r\n" WEB_SV_FMT,
                                                             VersionString,
                                                             ResponseStatus,
                                                             ReasonPhrase,
-                                                            WEB_SV_ARG(ResponseHeaders),
+                                                            WEB_SV_ARG(ResponseHeadersString),
                                                             WEB_SV_ARG(ResponseContext.Content));
 
             int SendStatus = send(ClientSock, ResponseString.Items, ResponseString.Count, 0);

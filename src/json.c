@@ -26,7 +26,11 @@ static inline b32 JsonIsWhitespace(u8 Char) {
     return Char == 0x20 || Char == 0x0A || Char == 0x0D || Char == 0x09;
 }
 
-static b32 JsonNextToken(web_string_view Input, uz *Position, json_token *OutToken) {
+static inline b32 JsonIsTerminalOrWhitespace(u8 Char) {
+    return JsonIsWhitespace(Char) || Char == '{' || Char == '}' || Char == '[' || Char == ']' || Char == '"';
+}
+
+static b32 JsonNextToken(web_arena *Arena, web_string_view Input, uz *Position, json_token *OutToken) {
     uz CurrentPosition = *Position;
 
     for (; CurrentPosition < Input.Count; ++CurrentPosition) {
@@ -102,7 +106,8 @@ static b32 JsonNextToken(web_string_view Input, uz *Position, json_token *OutTok
     default: {
         uz ValueStart = CurrentPosition;
         for (; CurrentPosition < Input.Count; ++CurrentPosition) {
-            if (JsonIsWhitespace(Input.Items[CurrentPosition])) break;
+            u8 Char = Input.Items[CurrentPosition];
+            if (JsonIsTerminalOrWhitespace(Char)) break;
         }
 
         web_string_view Value = {.Items = Input.Items + ValueStart, .Count = CurrentPosition - ValueStart};
@@ -126,6 +131,7 @@ static b32 JsonNextToken(web_string_view Input, uz *Position, json_token *OutTok
             OutToken->Type = TokenType;
         }
 
+        *Position = CurrentPosition;
         OutToken->Value = Value;
         return 1;
     }

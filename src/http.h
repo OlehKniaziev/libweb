@@ -32,6 +32,7 @@ typedef struct {
 typedef struct {
     web_http_header *Items;
     uz Count;
+    uz Capacity;
 } web_http_headers;
 
 #define ENUM_HTTP_VERSIONS \
@@ -70,6 +71,7 @@ typedef enum {
 typedef struct {
     web_arena *Arena;
     web_http_request Request;
+    web_http_headers ResponseHeaders;
     web_string_view Content;
 } web_http_response_context;
 
@@ -93,6 +95,8 @@ void WebHttpServerAttachHandler(web_http_server *Server, const char *Path, web_h
 static inline b32 WebHttpContextParseJsonBody(web_http_response_context *Ctx, web_json_value *OutValue) {
     return WebJsonParse(Ctx->Arena, Ctx->Request.Body, OutValue);
 }
+
+void WebHttpContextAddHeader(web_http_response_context *Ctx, web_string_view Name, web_string_view Value);
 
 #ifdef __cplusplus
     }

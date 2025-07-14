@@ -194,6 +194,7 @@ void WebHttpServerStart(web_http_server *Server, u16 Port) {
     while (1) {
     ServerLoopStart:
         WebArenaReset(&RequestArena);
+        ResponseContext.ResponseHeaders.Count = 0;
         ResponseContext.Content = (web_string_view) {0};
 
         int ClientSock = accept(ServerSock, (struct sockaddr*)&ClientAddr, &ClientAddrSize);
@@ -238,12 +239,43 @@ void WebHttpServerStart(web_http_server *Server, u16 Port) {
             const char *ReasonPhrase = GetHttpResponseStatusReasonPhrase(ResponseStatus);
             const char *VersionString = HttpVersionStrings[HttpRequest.Version];
 
+            struct {
+                u8 *Items;
+                uz Count;
+                uz Capacity;
+            } ResponseHeadersString;
+            WEB_ARRAY_INIT(ResponseContext.Arena, &ResponseHeadersString);
+
+            for (uz HeaderIndex = 0; HeaderIndex < ResponseContext.ResponseHeaders.Count; ++HeaderIndex) {
+                web_http_header Header = ResponseContext.ResponseHeaders.Items[HeaderIndex];
+
+                for (uz I = 0; I < Header.Name.Count; ++I) {
+                    WEB_ARRAY_PUSH(ResponseContext.Arena, &ResponseHeadersString, Header.Name.Items[I]);
+                }
+
+                WEB_ARRAY_PUSH(ResponseContext.Arena, &ResponseHeadersString, ':');
+                WEB_ARRAY_PUSH(ResponseContext.Arena, &ResponseHeadersString, ' ');
+
+                for (uz I = 0; I < Header.Value.Count; ++I) {
+                    WEB_ARRAY_PUSH(ResponseContext.Arena, &ResponseHeadersString, Header.Value.Items[I]);
+                }
+
+                WEB_ARRAY_PUSH(ResponseContext.Arena, &ResponseHeadersString, '\r');
+                WEB_ARRAY_PUSH(ResponseContext.Arena, &ResponseHeadersString, '\n');
+            }
+
+            web_string_view ResponseHeaders = {
+                .Items = ResponseHeadersString.Items,
+                .Count = ResponseHeadersString.Count,
+            };
+
             web_string_view ResponseString = WebArenaFormat(&RequestArena,
-                                                     "%s %u %s\r\nAccess-Control-Allow-Origin: *\r\n\r\n" WEB_SV_FMT,
-                                                     VersionString,
-                                                     ResponseStatus,
-                                                     ReasonPhrase,
-                                                     WEB_SV_ARG(ResponseContext.Content));
+                                                            "%s %u %s\r\nAccess-Control-Allow-Origin: *\r\n" WEB_SV_FMT "\r\n" WEB_SV_FMT,
+                                                            VersionString,
+                                                            ResponseStatus,
+                                                            ReasonPhrase,
+                                                            WEB_SV_ARG(ResponseHeaders),
+                                                            WEB_SV_ARG(ResponseContext.Content));
 
             int SendStatus = send(ClientSock, ResponseString.Items, ResponseString.Count, 0);
             WEB_ASSERT(SendStatus != -1);
@@ -294,4 +326,12 @@ void WebHttpServerInit(web_http_server *Server) {
     Server->HandlersPaths = WebArenaPush(&Server->Arena, sizeof(*Server->HandlersPaths) * HTTP_SERVER_MAX_HANDLERS);
 
     Server->HandlersCount = 0;
+}
+
+void WebHttpContextAddHeader(web_http_response_context *Ctx, web_string_view Name, web_string_view Value) {
+    web_http_header Header = {
+        .Name = Name,
+        .Value = Value,
+    };
+    WEB_ARRAY_PUSH(Ctx->Arena, &Ctx->ResponseHeaders, Header);
 }

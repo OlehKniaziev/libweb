@@ -61,6 +61,20 @@ static inline b32 WebJsonObjectGetStringView(const web_json_object *Object, web_
     return 0;
 }
 
+static inline b32 WebJsonObjectGetNumber(const web_json_object *Object, web_string_view Key, f64 *OutValue) {
+    web_json_value OutJsonValue;
+    if (!WebJsonObjectGet(Object, Key, &OutJsonValue)) {
+        return 0;
+    }
+
+    if (OutJsonValue.Type == JSON_NUMBER) {
+        *OutValue = OutJsonValue.Number;
+        return 1;
+    }
+
+    return 0;
+}
+
 #define WEB_ENUM_JSON_GETTERS \
     X(web_string_view) \
         X(f64) \

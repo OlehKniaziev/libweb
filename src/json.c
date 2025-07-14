@@ -85,20 +85,58 @@ static b32 JsonNextToken(web_arena *Arena, web_string_view Input, uz *Position, 
         return 1;
     }
     case '"': {
-        uz StringStart = CurrentPosition + 1;
-        for (CurrentPosition = StringStart; CurrentPosition < Input.Count; ++CurrentPosition) {
-            if (Input.Items[CurrentPosition] == '"') break;
+        ++CurrentPosition;
+        struct {
+            u8 *Items;
+            uz Capacity;
+            uz Count;
+        } String;
+        WEB_ARRAY_INIT(Arena, &String);
+
+        for (; CurrentPosition < Input.Count; ++CurrentPosition) {
+            u8 Char = Input.Items[CurrentPosition];
+            if (Char == '"') break;
+
+            if (Char == '\\') {
+                ++CurrentPosition;
+                if (CurrentPosition >= Input.Count) {
+                    break;
+                }
+
+                Char = Input.Items[CurrentPosition];
+
+                switch (Char) {
+                case 'n': {
+                    WEB_ARRAY_PUSH(Arena, &String, '\n');
+                    break;
+                }
+                case 'r': {
+                    WEB_ARRAY_PUSH(Arena, &String, '\r');
+                    break;
+                }
+                case '"': {
+                    WEB_ARRAY_PUSH(Arena, &String, '"');
+                    break;
+                }
+                case '\\': {
+                    WEB_ARRAY_PUSH(Arena, &String, '\\');
+                    break;
+                }
+                default: WEB_TODO();
+                }
+            } else {
+                WEB_ARRAY_PUSH(Arena, &String, Char);
+            }
         }
 
         if (CurrentPosition >= Input.Count) {
             OutToken->Type = TOKEN_UNCLOSED_STRING;
-            --StringStart;
         } else {
             OutToken->Type = TOKEN_STRING;
         }
 
-        OutToken->Value.Items = Input.Items + StringStart;
-        OutToken->Value.Count = CurrentPosition - StringStart;
+        OutToken->Value.Items = String.Items;
+        OutToken->Value.Count = String.Count;
 
         *Position = CurrentPosition + 1;
         return 1;
@@ -139,8 +177,10 @@ static b32 JsonNextToken(web_arena *Arena, web_string_view Input, uz *Position, 
 }
 
 static b32 JsonPeekToken(web_string_view Input, uz *Position, json_token *OutToken) {
+    web_arena *Temp = WebGetTempArena();
+
     uz SavedPosition = *Position;
-    b32 Result = JsonNextToken(Input, Position, OutToken);
+    b32 Result = JsonNextToken(Temp, Input, Position, OutToken);
     *Position = SavedPosition;
     return Result;
 }
@@ -176,7 +216,7 @@ static f64 ParseF64(web_string_view Buffer) {
 static b32 JsonParseValue(web_arena *Arena, web_string_view Input, uz *Position, web_json_value *OutValue) {
     json_token Token;
 
-    if (!JsonNextToken(Input, Position, &Token)) return 0;
+    if (!JsonNextToken(Arena, Input, Position, &Token)) return 0;
 
     switch (Token.Type) {
     case TOKEN_NUMBER: {
@@ -209,7 +249,7 @@ static b32 JsonParseValue(web_arena *Arena, web_string_view Input, uz *Position,
         while (1) {
             if (!JsonPeekToken(Input, Position, &Token)) return 0;
             if (Token.Type == TOKEN_RBRACKET) {
-                WEB_ASSERT(JsonNextToken(Input, Position, &Token));
+                WEB_ASSERT(JsonNextToken(Arena, Input, Position, &Token));
                 break;
             }
 
@@ -219,7 +259,7 @@ static b32 JsonParseValue(web_arena *Arena, web_string_view Input, uz *Position,
 
             WEB_ARRAY_PUSH(Arena, &Elements, Element);
 
-            if (!JsonNextToken(Input, Position, &Token)) return 0;
+            if (!JsonNextToken(Arena, Input, Position, &Token)) return 0;
             if (Token.Type == TOKEN_RBRACKET) break;
             if (Token.Type == TOKEN_COMMA) goto ParseElement;
         }
@@ -238,17 +278,17 @@ static b32 JsonParseValue(web_arena *Arena, web_string_view Input, uz *Position,
         while (1) {
             if (!JsonPeekToken(Input, Position, &Token)) return 0;
             if (Token.Type == TOKEN_RBRACE) {
-                WEB_ASSERT(JsonNextToken(Input, Position, &Token));
+                WEB_ASSERT(JsonNextToken(Arena, Input, Position, &Token));
                 break;
             }
 
         ParseKeyValue:
-            if (!JsonNextToken(Input, Position, &Token)) return 0;
+            if (!JsonNextToken(Arena, Input, Position, &Token)) return 0;
             if (Token.Type != TOKEN_STRING) return 0;
 
             web_string_view KeyToInsert = Token.Value;
 
-            if (!JsonNextToken(Input, Position, &Token)) return 0;
+            if (!JsonNextToken(Arena, Input, Position, &Token)) return 0;
             if (Token.Type != TOKEN_COLON) return 0;
 
             web_json_value ValueToInsert;
@@ -283,7 +323,7 @@ static b32 JsonParseValue(web_arena *Arena, web_string_view Input, uz *Position,
                 if (ObjectIndex >= Object.Capacity) ObjectIndex = 0;
             }
 
-            if (!JsonNextToken(Input, Position, &Token)) return 0;
+            if (!JsonNextToken(Arena, Input, Position, &Token)) return 0;
             if (Token.Type == TOKEN_RBRACE) break;
             if (Token.Type == TOKEN_COMMA) goto ParseKeyValue;
         }

@@ -423,6 +423,7 @@ void WebHttpServerStart(web_http_server *Server, u16 Port) {
     ServerLoopStart:
         WebArenaReset(&RequestArena);
         ResponseContext.ResponseHeaders.Count = 0;
+        WEB_ARRAY_INIT(&RequestArena, &ResponseContext.ResponseHeaders);
         ResponseContext.Content = (web_string_view) {0};
 
         int ClientSock = accept(ServerSock, (struct sockaddr*)&ClientAddr, &ClientAddrSize);
@@ -432,18 +433,17 @@ void WebHttpServerStart(web_http_server *Server, u16 Port) {
             WEB_PANIC_FMT("Could not accept a new connection: %s", strerror(AcceptError));
         }
 
-        ssize_t ReceivedBytesCount = recv(ClientSock, RequestArena.Items, RequestArena.Capacity, 0);
+        const uz ParseBufferCapacity = 1024 * 1024 * 4;
+        u8 *ParseBufferItems = WebArenaPush(&RequestArena, ParseBufferCapacity);
+
+        ssize_t ReceivedBytesCount = recv(ClientSock, ParseBufferItems, ParseBufferCapacity, 0);
         if (ReceivedBytesCount == -1) {
             printf("Could not receive data from the socket\n");
             close(ClientSock);
             continue;
         }
 
-        WEB_ASSERT(RequestArena.Offset == 0);
-
-        web_string_view ParseBuffer = {.Items = RequestArena.Items, .Count = ReceivedBytesCount};
-
-        RequestArena.Offset = WebAlignForward(ReceivedBytesCount, sizeof(uz));
+        web_string_view ParseBuffer = {.Items = ParseBufferItems, .Count = ReceivedBytesCount};
 
         web_http_request HttpRequest;
         b32 Success = WebHttpRequestParse(&RequestArena, ParseBuffer, &HttpRequest);

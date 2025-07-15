@@ -332,7 +332,7 @@ static b32 JsonParseValue(web_arena *Arena, web_string_view Input, uz *Position,
         OutValue->Object = Object;
         return 1;
     }
-    default: WEB_TODO();
+    default: return 0;
     }
 }
 

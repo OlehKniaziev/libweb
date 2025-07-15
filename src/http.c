@@ -63,7 +63,6 @@ b32 WebHttpRequestSend(web_arena *ResponseArena,
     sz Status = getaddrinfo(HostnameCStr, PortCStr, &Hints, &ServerAddr);
     if (Status != 0) {
         // FIXME(oleh): Report an error.
-        printf("ERROR: %s\n", gai_strerror(Status));
         Result = 0;
         goto End;
     }
@@ -77,7 +76,6 @@ b32 WebHttpRequestSend(web_arena *ResponseArena,
 
     Status = connect(ServerSock, ServerAddr->ai_addr, ServerAddr->ai_addrlen);
     if (Status != 0) {
-        perror("Connect");
         Result = 0;
         goto End;
     }

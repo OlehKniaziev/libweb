@@ -18,6 +18,13 @@ WEB_ENUM_HTTP_METHODS
 #undef X
 };
 
+const char *WebHttpGetResponseStatusReason(web_http_response_status Status) {
+#define X(Name, Code, Reason) if (Status == HTTP_STATUS_##Name) return Reason;
+WEB_ENUM_HTTP_RESPONSE_STATUSES
+#undef X
+    WEB_PANIC_FMT("Unknown response status %d", Status);
+}
+
 static void HttpHeadersFormat(web_arena *Arena, web_dynamic_string *String, web_http_headers Headers) {
     for (uz HeaderIndex = 0; HeaderIndex < Headers.Count; ++HeaderIndex) {
         web_http_header Header = Headers.Items[HeaderIndex];

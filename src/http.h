@@ -58,6 +58,8 @@ typedef enum {
 #undef X
 } web_http_response_status;
 
+const char *WebHttpGetResponseStatusReason(web_http_response_status);
+
 typedef struct {
     web_http_method Method;
     web_string_view Path;

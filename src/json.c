@@ -27,7 +27,14 @@ static inline b32 JsonIsWhitespace(u8 Char) {
 }
 
 static inline b32 JsonIsTerminalOrWhitespace(u8 Char) {
-    return JsonIsWhitespace(Char) || Char == '{' || Char == '}' || Char == '[' || Char == ']' || Char == '"';
+    return JsonIsWhitespace(Char) ||
+           Char == '{' ||
+           Char == '}' ||
+           Char == '[' ||
+           Char == ']' ||
+           Char == '"' ||
+           Char == ',' ||
+           Char == ':';
 }
 
 static b32 JsonNextToken(web_arena *Arena, web_string_view Input, uz *Position, json_token *OutToken) {
@@ -332,7 +339,9 @@ static b32 JsonParseValue(web_arena *Arena, web_string_view Input, uz *Position,
         OutValue->Object = Object;
         return 1;
     }
-    default: return 0;
+    default: {
+        return 0;
+    }
     }
 }
 

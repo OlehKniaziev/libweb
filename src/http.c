@@ -345,7 +345,7 @@ b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_reque
     if (I >= Buffer.Count) return 0;
 
     // 3. Message body. (https://datatracker.ietf.org/doc/html/rfc2616#section-4.3)
-    web_string_view RequestBody = {.Items = Buffer.Items + I + 2, .Count = Buffer.Count - I - 2};
+    web_string_view RequestBody = {.Items = Buffer.Items + I, .Count = Buffer.Count - I};
 
     OutRequest->Method = RequestMethod;
     OutRequest->Path = RequestPath;

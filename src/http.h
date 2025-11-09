@@ -44,17 +44,71 @@ WEB_ENUM_HTTP_VERSIONS
 #undef X
 } web_http_version;
 
-#define WEB_ENUM_HTTP_RESPONSE_STATUSES                         \
-        X(OK, 200, "OK")                                        \
-        X(BAD_REQUEST, 400, "Bad Request")                      \
-        X(FORBIDDEN, 403, "Forbidden")                          \
-        X(NOT_FOUND, 404, "Not Found")                          \
-        X(METHOD_NOT_ALLOWED, 405, "Method Not Allowed")        \
-        X(INTERNAL_SERVER_ERROR, 500, "Internal Server Error")  \
+#define ENUM_HTTP_RESPONSE_STATUSES                             \
+    X(OK, 200, "OK")                                            \
+    X(CREATED, 201, "Created") \
+    X(ACCEPTED, 202, "Accepted") \
+    X(NON_AUTHORITATIVE_INFORMATION, 203, "Non-Authoritative Information") \
+    X(NO_CONTENT, 204, "No Content") \
+    X(RESET_CONTENT, 205, "Reset Content") \
+    X(PARTIAL_CONTENT, 206, "Partial Content") \
+    X(MULTI_STATUS, 207, "Multi-Status") \
+    X(ALREADY_REPORTED, 208, "Already Reported") \
+    X(IM_USED, 226, "IM Used") \
+    \
+    X(MULTIPLE_CHOICES, 300, "Multiple Choices") \
+    X(MOVED_PERMANENTLY, 301, "Moved Permanently") \
+    X(FOUND, 302, "Found") \
+    X(SEE_OTHER, 303, "See Other") \
+    X(NOT_MODIFIED, 304, "Not Modified") \
+    X(TEMPORARY_REDIRECT, 307, "Temporary Redirect") \
+    X(PERMANENT_REDIRECT, 308, "Permanent Redirect") \
+    \
+    X(BAD_REQUEST, 400, "Bad Request") \
+    X(UNAUTHORIZED, 401, "Unauthorized") \
+    X(PAYMENT_REQUIRED, 402, "Payment Required") \
+    X(FORBIDDEN, 403, "Forbidden") \
+    X(NOT_FOUND, 404, "Not Found") \
+    X(METHOD_NOT_ALLOWED, 405, "Method Not Allowed") \
+    X(NOT_ACCEPTABLE, 406, "Not Acceptable") \
+    X(PROXY_AUTHENTICATION_REQUIRED, 407, "Proxy Authentication Required") \
+    X(REQUEST_TIMEOUT, 408, "Request Timeout") \
+    X(CONFLICT, 409, "Conflict") \
+    X(GONE, 410, "Gone") \
+    X(LENGTH_REQUIRED, 411, "Length Required") \
+    X(PRECONDITION_FAILED, 412, "Precondition Failed") \
+    X(PAYLOAD_TOO_LARGE, 413, "Content Too Large") \
+    X(URI_TOO_LONG, 414, "URI Too Long") \
+    X(UNSUPPORTED_MEDIA_TYPE, 415, "Unsupported Media Type") \
+    X(RANGE_NOT_SATISFIABLE, 416, "Range Not Satisfiable") \
+    X(EXPECTATION_FAILED, 417, "Expectation Failed") \
+    X(IM_A_TEAPOT, 418, "I'm a teapot") \
+    X(MISDIRECTED_REQUEST, 421, "Misdirected Request") \
+    X(UNPROCESSABLE_ENTITY, 422, "Unprocessable Entity") \
+    X(LOCKED, 423, "Locked") \
+    X(FAILED_DEPENDENCY, 424, "Failed Dependency") \
+    X(TOO_EARLY, 425, "Too Early") \
+    X(UPGRADE_REQUIRED, 426, "Upgrade Required") \
+    X(PRECONDITION_REQUIRED, 428, "Precondition Required") \
+    X(TOO_MANY_REQUESTS, 429, "Too Many Requests") \
+    X(REQUEST_HEADER_FIELDS_TOO_LARGE, 431, "Request Header Fields Too Large") \
+    X(UNAVAILABLE_FOR_LEGAL_REASONS, 451, "Unavailable For Legal Reasons") \
+    \
+    X(INTERNAL_SERVER_ERROR, 500, "Internal Server Error") \
+    X(NOT_IMPLEMENTED, 501, "Not Implemented") \
+    X(BAD_GATEWAY, 502, "Bad Gateway") \
+    X(SERVICE_UNAVAILABLE, 503, "Service Unavailable") \
+    X(GATEWAY_TIMEOUT, 504, "Gateway Timeout") \
+    X(HTTP_VERSION_NOT_SUPPORTED, 505, "HTTP Version Not Supported") \
+    X(VARIANT_ALSO_NEGOTIATES, 506, "Variant Also Negotiates") \
+    X(INSUFFICIENT_STORAGE, 507, "Insufficient Storage") \
+    X(LOOP_DETECTED, 508, "Loop Detected") \
+    X(NOT_EXTENDED, 510, "Not Extended") \
+    X(NETWORK_AUTHENTICATION_REQUIRED, 511, "Network Authentication Required")
 
 typedef enum {
 #define X(Status, Code, _Phrase) HTTP_STATUS_##Status = Code,
-    WEB_ENUM_HTTP_RESPONSE_STATUSES
+    ENUM_HTTP_RESPONSE_STATUSES
 #undef X
 } web_http_response_status;
 

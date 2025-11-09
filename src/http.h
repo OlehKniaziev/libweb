@@ -44,7 +44,7 @@ WEB_ENUM_HTTP_VERSIONS
 #undef X
 } web_http_version;
 
-#define ENUM_HTTP_RESPONSE_STATUSES                             \
+#define WEB_ENUM_HTTP_RESPONSE_STATUSES                             \
     X(OK, 200, "OK")                                            \
     X(CREATED, 201, "Created") \
     X(ACCEPTED, 202, "Accepted") \
@@ -108,7 +108,7 @@ WEB_ENUM_HTTP_VERSIONS
 
 typedef enum {
 #define X(Status, Code, _Phrase) HTTP_STATUS_##Status = Code,
-    ENUM_HTTP_RESPONSE_STATUSES
+    WEB_ENUM_HTTP_RESPONSE_STATUSES
 #undef X
 } web_http_response_status;
 

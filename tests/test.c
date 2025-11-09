@@ -11,8 +11,6 @@ void TestBase64(void) {
     u8 Buffer[BufferCount];
     WebBase64Encode(Input, Buffer, &BufferCount);
 
-    printf("Buffer count: %zu\n", BufferCount);
-
     web_string_view Encoded;
     Encoded.Items = Buffer;
     Encoded.Count = BufferCount;

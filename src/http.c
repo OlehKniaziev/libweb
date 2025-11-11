@@ -350,7 +350,7 @@ b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_reque
 
     if (!HttpHeadersParse(Arena, Buffer, &I, &Headers)) return 0;
 
-    if (I >= Buffer.Count) return 0;
+    WEB_ASSERT(I <= Buffer.Count);
 
     // 3. Message body. (https://datatracker.ietf.org/doc/html/rfc2616#section-4.3)
     web_string_view RequestBody = {.Items = Buffer.Items + I, .Count = Buffer.Count - I};

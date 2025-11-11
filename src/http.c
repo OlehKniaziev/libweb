@@ -1,4 +1,5 @@
 #include "http.h"
+#include "threadpool.h"
 
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -372,9 +373,139 @@ static const char *GetHttpResponseStatusReasonPhrase(web_http_response_status St
     }
 }
 
+typedef void *(*sync_pool_new_proc)(uz *Size);
+
+typedef struct sync_pool_node {
+    struct sync_pool_node *Next;
+    u8 Item[];
+} sync_pool_node;
+
+typedef struct {
+    sync_pool_new_proc NewProc;
+    sync_pool_node *Head;
+} sync_pool;
+
+static void *SyncPoolAlloc(sync_pool *Pool) {
+    if (Pool->Head == NULL) {
+        uz ItemSize = 0;
+        void *ItemData = Pool->NewProc(&ItemSize);
+        sync_pool_node *Node = malloc(sizeof(sync_pool_node) + ItemSize);
+        WEB_STRUCT_ZERO(Node);
+        memcpy(Node->Item, ItemData, ItemSize);
+        return Node->Item;
+    }
+
+    sync_pool_node *Node = Pool->Head;
+    Pool->Head = Pool->Head->Next;
+    return Node->Item;
+}
+
+static void SyncPoolFree(sync_pool *Pool, void *Item) {
+    sync_pool_node *Node = (sync_pool_node *)((u8 *)Item - sizeof(Node->Next));
+    Node->Next = Pool->Head;
+    Pool->Head = Node;
+}
+
 #define TCP_BACKLOG_SIZE 256
 
 #define DEFAULT_REQUEST_ARENA_CAPACITY (4ll * 1024ll * 1024ll * 1024ll)
+
+typedef struct {
+    sync_pool *WorkerDataPool;
+    sync_pool *ContextPool;
+    web_http_server *Server;
+    int ClientSock;
+} worker_data;
+
+static void ServerWorker(void *Arg) {
+    worker_data *Data = (worker_data *)Arg;
+
+    web_http_response_context *Ctx = SyncPoolAlloc(Data->ContextPool);
+
+    WebArenaReset(&Ctx->Arena);
+    Ctx->ResponseHeaders.Count = 0;
+    WEB_ARRAY_INIT(&Ctx->Arena, &Ctx->ResponseHeaders);
+    Ctx->Content = (web_string_view) {0};
+
+    const uz ParseBufferCapacity = 1024 * 1024 * 4;
+    u8 *ParseBufferItems = WebArenaPush(&Ctx->Arena, ParseBufferCapacity);
+
+    ssize_t ReceivedBytesCount = recv(Data->ClientSock, ParseBufferItems, ParseBufferCapacity, 0);
+    if (ReceivedBytesCount == -1) {
+        printf("Could not receive data from the socket\n");
+        goto Cleanup;
+    }
+
+    web_string_view ParseBuffer = {.Items = ParseBufferItems, .Count = ReceivedBytesCount};
+
+    web_http_request HttpRequest;
+    b32 Success = WebHttpRequestParse(&Ctx->Arena, ParseBuffer, &HttpRequest);
+    if (!Success) {
+        printf("Could not parse the HTTP request\n");
+        goto Cleanup;
+    }
+
+    for (uz HandlerIndex = 0; HandlerIndex < Data->Server->HandlersCount; ++HandlerIndex) {
+        web_string_view HandlerPath = Data->Server->HandlersPaths[HandlerIndex];
+        if (!WebStringViewEqual(HandlerPath, HttpRequest.Path)) continue;
+
+        web_http_request_handler Handler = Data->Server->Handlers[HandlerIndex];
+
+        web_http_response_status ResponseStatus = Handler(Ctx);
+
+        // 1. Status line. (https://datatracker.ietf.org/doc/html/rfc2616#section-6.1)
+        const char *ReasonPhrase = GetHttpResponseStatusReasonPhrase(ResponseStatus);
+        const char *VersionString = HttpVersionStrings[HttpRequest.Version];
+
+        web_dynamic_string ResponseHeadersString;
+        WEB_ARRAY_INIT(&Ctx->Arena, &ResponseHeadersString);
+
+        HttpHeadersFormat(&Ctx->Arena, &ResponseHeadersString, Ctx->ResponseHeaders);
+
+        web_string_view ResponseString = WebArenaFormat(&Ctx->Arena,
+                                                        "%s %u %s\r\nAccess-Control-Allow-Origin: *\r\n" WEB_SV_FMT "\r\n" WEB_SV_FMT,
+                                                        VersionString,
+                                                        ResponseStatus,
+                                                        ReasonPhrase,
+                                                        WEB_SV_ARG(ResponseHeadersString),
+                                                        WEB_SV_ARG(Ctx->Content));
+
+        int SendStatus = send(Data->ClientSock, ResponseString.Items, ResponseString.Count, 0);
+        WEB_ASSERT(SendStatus != -1);
+
+        goto Cleanup;
+    }
+
+    web_http_response_status ResponseStatus = HTTP_STATUS_NOT_FOUND;
+    const char *ReasonPhrase = GetHttpResponseStatusReasonPhrase(ResponseStatus);
+    const char *VersionString = HttpVersionStrings[HttpRequest.Version];
+
+    // TODO(oleh): No handler found, just give em 404!
+    web_string_view ResponseString = WebArenaFormat(&Ctx->Arena,
+                                                    "%s %u %s\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
+                                                    VersionString,
+                                                    ResponseStatus,
+                                                    ReasonPhrase);
+
+    int SendStatus = send(Data->ClientSock, ResponseString.Items, ResponseString.Count, 0);
+    WEB_ASSERT(SendStatus != -1);
+
+Cleanup:
+    close(Data->ClientSock);
+
+    SyncPoolFree(Data->ContextPool, Ctx);
+    SyncPoolFree(Data->WorkerDataPool, Data);
+}
+
+static void *NewWorkerDataPoolProc(uz *Size) {
+    *Size = sizeof(worker_data);
+    return malloc(*Size);
+}
+
+static void *NewContextPoolProc(uz *Size) {
+    *Size = sizeof(web_http_response_context);
+    return malloc(*Size);
+}
 
 void WebHttpServerStart(web_http_server *Server, u16 Port) {
     struct addrinfo Hints = {0};
@@ -413,19 +544,10 @@ void WebHttpServerStart(web_http_server *Server, u16 Port) {
     struct sockaddr_storage ClientAddr;
     socklen_t ClientAddrSize = sizeof(ClientAddr);
 
-    web_arena RequestArena;
-    WebArenaInit(&RequestArena, DEFAULT_REQUEST_ARENA_CAPACITY);
-
-    web_http_response_context ResponseContext = {0};
-    ResponseContext.Arena = &RequestArena;
+    sync_pool WorkerDataPool = {.NewProc = NewWorkerDataPoolProc};
+    sync_pool ContextPool = {.NewProc = NewContextPoolProc};
 
     while (1) {
-    ServerLoopStart:
-        WebArenaReset(&RequestArena);
-        ResponseContext.ResponseHeaders.Count = 0;
-        WEB_ARRAY_INIT(&RequestArena, &ResponseContext.ResponseHeaders);
-        ResponseContext.Content = (web_string_view) {0};
-
         int ClientSock = accept(ServerSock, (struct sockaddr*)&ClientAddr, &ClientAddrSize);
         if (ClientSock == -1) {
             int AcceptError = errno;
@@ -433,76 +555,14 @@ void WebHttpServerStart(web_http_server *Server, u16 Port) {
             WEB_PANIC_FMT("Could not accept a new connection: %s", strerror(AcceptError));
         }
 
-        const uz ParseBufferCapacity = 1024 * 1024 * 4;
-        u8 *ParseBufferItems = WebArenaPush(&RequestArena, ParseBufferCapacity);
+        worker_data *WorkerData = SyncPoolAlloc(&WorkerDataPool);
+        WorkerData->WorkerDataPool = &WorkerDataPool;
+        WorkerData->Server = Server;
+        WorkerData->ContextPool = &ContextPool;
+        WorkerData->ClientSock = ClientSock;
 
-        ssize_t ReceivedBytesCount = recv(ClientSock, ParseBufferItems, ParseBufferCapacity, 0);
-        if (ReceivedBytesCount == -1) {
-            printf("Could not receive data from the socket\n");
-            close(ClientSock);
-            continue;
-        }
-
-        web_string_view ParseBuffer = {.Items = ParseBufferItems, .Count = ReceivedBytesCount};
-
-        web_http_request HttpRequest;
-        b32 Success = WebHttpRequestParse(&RequestArena, ParseBuffer, &HttpRequest);
-        if (!Success) {
-            printf("Could not parse the HTTP request\n");
-            close(ClientSock);
-            continue;
-        }
-
-        for (uz HandlerIndex = 0; HandlerIndex < Server->HandlersCount; ++HandlerIndex) {
-            web_string_view HandlerPath = Server->HandlersPaths[HandlerIndex];
-            if (!WebStringViewEqual(HandlerPath, HttpRequest.Path)) continue;
-
-            web_http_request_handler Handler = Server->Handlers[HandlerIndex];
-
-            ResponseContext.Request = HttpRequest;
-            web_http_response_status ResponseStatus = Handler(&ResponseContext);
-
-            // 1. Status line. (https://datatracker.ietf.org/doc/html/rfc2616#section-6.1)
-
-            const char *ReasonPhrase = GetHttpResponseStatusReasonPhrase(ResponseStatus);
-            const char *VersionString = HttpVersionStrings[HttpRequest.Version];
-
-            web_dynamic_string ResponseHeadersString;
-            WEB_ARRAY_INIT(ResponseContext.Arena, &ResponseHeadersString);
-
-            HttpHeadersFormat(ResponseContext.Arena, &ResponseHeadersString, ResponseContext.ResponseHeaders);
-
-            web_string_view ResponseString = WebArenaFormat(&RequestArena,
-                                                            "%s %u %s\r\nAccess-Control-Allow-Origin: *\r\n" WEB_SV_FMT "\r\n" WEB_SV_FMT,
-                                                            VersionString,
-                                                            ResponseStatus,
-                                                            ReasonPhrase,
-                                                            WEB_SV_ARG(ResponseHeadersString),
-                                                            WEB_SV_ARG(ResponseContext.Content));
-
-            int SendStatus = send(ClientSock, ResponseString.Items, ResponseString.Count, 0);
-            WEB_ASSERT(SendStatus != -1);
-
-            close(ClientSock);
-
-            goto ServerLoopStart;
-        }
-
-        web_http_response_status ResponseStatus = HTTP_STATUS_NOT_FOUND;
-        const char *ReasonPhrase = GetHttpResponseStatusReasonPhrase(ResponseStatus);
-        const char *VersionString = HttpVersionStrings[HttpRequest.Version];
-
-        // TODO(oleh): No handler found, just give em 404!
-        web_string_view ResponseString = WebArenaFormat(&RequestArena,
-                                                 "%s %u %s\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
-                                                 VersionString,
-                                                 ResponseStatus,
-                                                 ReasonPhrase);
-
-        int SendStatus = send(ClientSock, ResponseString.Items, ResponseString.Count, 0);
-        WEB_ASSERT(SendStatus != -1);
-
-        close(ClientSock);
+        web_thread_pool_task Task = {.Proc = ServerWorker, .Arg = WorkerData};
+        WebThreadPoolScheduleTask(&Server->ThreadPool, Task);
     }
 }
 
@@ -522,13 +582,18 @@ void WebHttpServerAttachHandler(web_http_server *Server, const char *Path, web_h
     ++Server->HandlersCount;
 }
 
-void WebHttpServerInit(web_http_server *Server) {
+b32 WebHttpServerInit(web_http_server *Server, web_http_server_config *Config) {
     WebArenaInit(&Server->Arena, HTTP_SERVER_ARENA_CAPACITY);
 
     Server->Handlers = WebArenaPush(&Server->Arena, sizeof(*Server->Handlers) * HTTP_SERVER_MAX_HANDLERS);
     Server->HandlersPaths = WebArenaPush(&Server->Arena, sizeof(*Server->HandlersPaths) * HTTP_SERVER_MAX_HANDLERS);
 
     Server->HandlersCount = 0;
+
+    Server->ThreadsCount = Config->NumThreads;
+
+    web_thread_pool_config ThreadPoolConfig = {.NumThreads = Server->ThreadsCount};
+    return WebThreadPoolInit(&Server->ThreadPool, &Server->Arena, &ThreadPoolConfig);
 }
 
 void WebHttpContextAddHeader(web_http_response_context *Ctx, web_string_view Name, web_string_view Value) {
@@ -536,5 +601,5 @@ void WebHttpContextAddHeader(web_http_response_context *Ctx, web_string_view Nam
         .Name = Name,
         .Value = Value,
     };
-    WEB_ARRAY_PUSH(Ctx->Arena, &Ctx->ResponseHeaders, Header);
+    WEB_ARRAY_PUSH(&Ctx->Arena, &Ctx->ResponseHeaders, Header);
 }

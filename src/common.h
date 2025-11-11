@@ -17,7 +17,7 @@
 
 #define WEB_MEMORY_ZERO(Ptr, Size) (memset((Ptr), 0, (Size)))
 
-#define WEB_STRUCT_ZERO(Ptr) MEMORY_ZERO((Ptr), sizeof(*(Ptr)))
+#define WEB_STRUCT_ZERO(Ptr) WEB_MEMORY_ZERO((Ptr), sizeof(*(Ptr)))
 
 #define WEB_PANIC(Msg) do {                                                 \
         fprintf(stderr, "%s:%d: PROGRAM PANICKED: %s\n", __FILE__, __LINE__, Msg); \

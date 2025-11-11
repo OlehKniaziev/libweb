@@ -3,6 +3,7 @@
 
 #include "common.h"
 #include "json.h"
+#include "threadpool.h"
 
 #ifdef __cplusplus
     extern "C" {
@@ -139,7 +140,7 @@ b32 WebHttpRequestSend(web_arena *Arena,
 b32 WebHttpResponseParse(web_arena *Arena, web_string_view Buffer, web_http_response *OutResponse);
 
 typedef struct {
-    web_arena *Arena;
+    web_arena Arena;
     web_http_request Request;
     web_http_headers ResponseHeaders;
     web_string_view Content;
@@ -153,9 +154,16 @@ typedef struct {
     web_string_view *HandlersPaths;
     web_http_request_handler *Handlers;
     uz HandlersCount;
+    uz ThreadsCount;
+    web_thread_pool ThreadPool;
 } web_http_server;
 
-void WebHttpServerInit(web_http_server *);
+typedef struct {
+    s16 NumThreads;
+    u16 Port;
+} web_http_server_config;
+
+b32 WebHttpServerInit(web_http_server *, web_http_server_config *);
 
 void WebHttpResponseWrite(web_http_response_context *, web_string_view);
 
@@ -163,7 +171,7 @@ void WebHttpServerStart(web_http_server *Server, u16 Port);
 void WebHttpServerAttachHandler(web_http_server *Server, const char *Path, web_http_request_handler WebHandler);
 
 static inline b32 WebHttpContextParseJsonBody(web_http_response_context *Ctx, web_json_value *OutValue) {
-    return WebJsonParse(Ctx->Arena, Ctx->Request.Body, OutValue);
+    return WebJsonParse(&Ctx->Arena, Ctx->Request.Body, OutValue);
 }
 
 void WebHttpContextAddHeader(web_http_response_context *Ctx, web_string_view Name, web_string_view Value);

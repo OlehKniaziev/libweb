@@ -434,27 +434,44 @@ typedef struct sync_pool_node {
 typedef struct {
     sync_pool_new_proc NewProc;
     sync_pool_node *Head;
+    web_mutex Mu;
 } sync_pool;
 
+static void SyncPoolInit(sync_pool *Pool, sync_pool_new_proc NewProc) {
+    WEB_STRUCT_ZERO(Pool);
+    Pool->NewProc = NewProc;
+    WebMutexInit(&Pool->Mu);
+}
+
 static void *SyncPoolAlloc(sync_pool *Pool) {
+    WebMutexLock(&Pool->Mu);
+
+    sync_pool_node *Node = NULL;
+
     if (Pool->Head == NULL) {
         uz ItemSize = 0;
         void *ItemData = Pool->NewProc(&ItemSize);
-        sync_pool_node *Node = malloc(sizeof(sync_pool_node) + ItemSize);
+        Node = malloc(sizeof(sync_pool_node) + ItemSize);
         WEB_STRUCT_ZERO(Node);
         memcpy(Node->Item, ItemData, ItemSize);
-        return Node->Item;
+        goto Cleanup;
     }
 
-    sync_pool_node *Node = Pool->Head;
+    Node = Pool->Head;
     Pool->Head = Pool->Head->Next;
+Cleanup:
+    WebMutexUnlock(&Pool->Mu);
     return Node->Item;
 }
 
 static void SyncPoolFree(sync_pool *Pool, void *Item) {
+    WebMutexLock(&Pool->Mu);
+
     sync_pool_node *Node = (sync_pool_node *)((u8 *)Item - sizeof(Node->Next));
     Node->Next = Pool->Head;
     Pool->Head = Node;
+
+    WebMutexUnlock(&Pool->Mu);
 }
 
 #define TCP_BACKLOG_SIZE 256
@@ -599,8 +616,11 @@ void WebHttpServerStart(web_http_server *Server, u16 Port) {
     struct sockaddr_storage ClientAddr;
     socklen_t ClientAddrSize = sizeof(ClientAddr);
 
-    sync_pool WorkerDataPool = {.NewProc = NewWorkerDataPoolProc};
-    sync_pool ContextPool = {.NewProc = NewContextPoolProc};
+    sync_pool WorkerDataPool;
+    SyncPoolInit(&WorkerDataPool, NewWorkerDataPoolProc);
+
+    sync_pool ContextPool;
+    SyncPoolInit(&ContextPool, NewContextPoolProc);
 
     while (1) {
         int ClientSock = accept(ServerSock, (struct sockaddr*)&ClientAddr, &ClientAddrSize);

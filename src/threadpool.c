@@ -1,3 +1,4 @@
+#include <errno.h>
 #include "threadpool.h"
 
 b32 WebThreadLaunch(web_thread *Thread, web_thread_proc ThreadProc, void *ThreadProcArg) {
@@ -12,14 +13,15 @@ static void *ThreadPoolWorkerProc(void *Arg) {
 
     while (1) {
         while (ThreadPool->QueueHead == ThreadPool->QueueTail) {
-            pthread_mutex_lock(&ThreadPool->QueueCondMu);
-            pthread_cond_wait(&ThreadPool->QueueCondVar, &ThreadPool->QueueCondMu);
+            WebMutexUnlock(&ThreadPool->QueueCondMu);
+            WebMutexLock(&ThreadPool->QueueCondMu);
+            pthread_cond_wait(&ThreadPool->QueueCondVar, &ThreadPool->QueueCondMu.Inner);
         }
 
         web_thread_pool_task Task = ThreadPool->QueueItems[ThreadPool->QueueHead];
         ThreadPool->QueueHead = (ThreadPool->QueueHead + 1) % ThreadPool->QueueCapacity;
 
-        pthread_mutex_unlock(&ThreadPool->QueueCondMu);
+        WebMutexUnlock(&ThreadPool->QueueCondMu);
 
         Task.Proc(Task.Arg);
     }
@@ -41,7 +43,7 @@ b32 WebThreadPoolInit(web_thread_pool *ThreadPool, web_arena *Arena, web_thread_
     ThreadPool->QueueTail = 0;
 
     ThreadPool->QueueCondVar = (pthread_cond_t) PTHREAD_COND_INITIALIZER;
-    ThreadPool->QueueCondMu = (pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER;
+    WebMutexInit(&ThreadPool->QueueCondMu);
 
     ThreadPool->QueueCapacity = 128;
     ThreadPool->QueueItems = WEB_ARENA_PUSH_ZERO(Arena, sizeof(*ThreadPool->QueueItems) * ThreadPool->QueueCapacity);
@@ -50,11 +52,9 @@ b32 WebThreadPoolInit(web_thread_pool *ThreadPool, web_arena *Arena, web_thread_
 }
 
 void WebThreadPoolScheduleTask(web_thread_pool *ThreadPool, web_thread_pool_task Task) {
-    pthread_mutex_lock(&ThreadPool->QueueCondMu);
+    WebMutexLock(&ThreadPool->QueueCondMu);
 
-    if (ThreadPool->QueueHead == ThreadPool->QueueTail) {
-        pthread_cond_broadcast(&ThreadPool->QueueCondVar);
-    }
+    b32 WakeUpWorkers = ThreadPool->QueueHead == ThreadPool->QueueTail;
 
     ThreadPool->QueueItems[ThreadPool->QueueTail] = Task;
 
@@ -69,5 +69,33 @@ void WebThreadPoolScheduleTask(web_thread_pool *ThreadPool, web_thread_pool_task
         ThreadPool->QueueCapacity = NewCapacity;
     }
 
-    pthread_mutex_unlock(&ThreadPool->QueueCondMu);
+    WebMutexUnlock(&ThreadPool->QueueCondMu);
+
+    if (WakeUpWorkers) {
+        pthread_cond_broadcast(&ThreadPool->QueueCondVar);
+    }
+}
+
+void WebMutexInit(web_mutex *Mu) {
+    pthread_mutexattr_t Attrs = {0};
+    pthread_mutexattr_init(&Attrs);
+    pthread_mutexattr_settype(&Attrs, PTHREAD_MUTEX_ERRORCHECK);
+    pthread_mutex_init(&Mu->Inner, &Attrs);
+}
+
+void WebMutexLock(web_mutex *Mu) {
+    int Err = pthread_mutex_lock(&Mu->Inner);
+    if (Err == EDEADLK) WEB_PANIC("Deadlock: the calling thread is already holding the mutex");
+    if (Err == EINVAL) WEB_PANIC("Invalid mutex state. Was it properly initialized?");
+}
+
+void WebMutexUnlock(web_mutex *Mu) {
+    int Err = pthread_mutex_unlock(&Mu->Inner);
+    if (Err == EINVAL) WEB_PANIC("Invalid mutex state. Was it properly initialized?");
+}
+
+b32 WebMutexTryLock(web_mutex *Mu) {
+    int Err = pthread_mutex_unlock(&Mu->Inner);
+    if (Err == EINVAL) WEB_PANIC("Invalid mutex state. Was it properly initialized?");
+    return Err != EBUSY;
 }

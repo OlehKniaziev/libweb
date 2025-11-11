@@ -37,6 +37,7 @@ typedef struct {
 } web_http_headers;
 
 #define WEB_ENUM_HTTP_VERSIONS \
+    X(1_0, "HTTP/1.0") \
     X(1_1, "HTTP/1.1")
 
 typedef enum {

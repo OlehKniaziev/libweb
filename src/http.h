@@ -130,7 +130,7 @@ typedef struct {
     web_string_view Body;
 } web_http_response;
 
-b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_request *Out);
+b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_request *Out, web_string_view *Error);
 b32 WebHttpRequestSend(web_arena *Arena,
                        web_string_view Hostname,
                        u16 Port,

@@ -160,7 +160,6 @@ typedef struct {
 
 typedef struct {
     s16 NumThreads;
-    u16 Port;
 } web_http_server_config;
 
 b32 WebHttpServerInit(web_http_server *, web_http_server_config *);

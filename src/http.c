@@ -504,7 +504,10 @@ static void *NewWorkerDataPoolProc(uz *Size) {
 
 static void *NewContextPoolProc(uz *Size) {
     *Size = sizeof(web_http_response_context);
-    return malloc(*Size);
+    web_http_response_context *ResponseContext = malloc(*Size);
+    WEB_STRUCT_ZERO(ResponseContext);
+    WebArenaInit(&ResponseContext->Arena, DEFAULT_REQUEST_ARENA_CAPACITY);
+    return ResponseContext;
 }
 
 void WebHttpServerStart(web_http_server *Server, u16 Port) {

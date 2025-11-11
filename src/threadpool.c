@@ -52,6 +52,10 @@ b32 WebThreadPoolInit(web_thread_pool *ThreadPool, web_arena *Arena, web_thread_
 void WebThreadPoolScheduleTask(web_thread_pool *ThreadPool, web_thread_pool_task Task) {
     pthread_mutex_lock(&ThreadPool->QueueCondMu);
 
+    if (ThreadPool->QueueHead == ThreadPool->QueueTail) {
+        pthread_cond_broadcast(&ThreadPool->QueueCondVar);
+    }
+
     ThreadPool->QueueItems[ThreadPool->QueueTail] = Task;
 
     ThreadPool->QueueTail = (ThreadPool->QueueTail + 1) % ThreadPool->QueueCapacity;

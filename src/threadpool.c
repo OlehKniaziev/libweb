@@ -12,9 +12,9 @@ static void *ThreadPoolWorkerProc(void *Arg) {
     web_thread_pool *ThreadPool = (web_thread_pool *)Arg;
 
     while (1) {
+        WebMutexLock(&ThreadPool->QueueCondMu);
+
         while (ThreadPool->QueueHead == ThreadPool->QueueTail) {
-            WebMutexUnlock(&ThreadPool->QueueCondMu);
-            WebMutexLock(&ThreadPool->QueueCondMu);
             pthread_cond_wait(&ThreadPool->QueueCondVar, &ThreadPool->QueueCondMu.Inner);
         }
 

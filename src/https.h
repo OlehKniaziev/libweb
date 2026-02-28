@@ -5,13 +5,19 @@
 #error "Define 'WEB_USE_HTTPS' to use this file"
 #endif // WEB_USE_HTTPS
 
+#ifdef WEB_USE_HTTPS_OPENSSL
+#include <openssl/ssl.h>
+#endif // WEB_USE_HTTPS_OPENSSL
+
 #ifdef __cplusplus
     extern "C" {
 #endif // __cplusplus
 
 typedef struct {
     enum {
+#ifdef WEB_USE_HTTPS_OPENSSL
         WEB_HTTPS_PROVIDER_OPENSSL,
+#endif // WEB_USE_HTTPS_OPENSSL
         WEB_HTTPS_PROVIDER_CUSTOM,
     } Type;
 

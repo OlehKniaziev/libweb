@@ -497,7 +497,7 @@ static sz HttpsRead(web_https_provider *Provider, int Sock, u8 *Buffer, uz Buffe
 #endif // WEB_USE_HTTPS_OPENSSL
     case WEB_HTTPS_PROVIDER_CUSTOM: {
         web_https_custom_provider *Custom = (web_https_custom_provider *)Provider->Data;
-        return Custom->VTable->Read(Custom->Data, Sock, Buffer, BufferCapacity);
+        return Custom->VTable.Read(Custom->Data, Sock, Buffer, BufferCapacity);
     }
     }
 
@@ -537,7 +537,7 @@ static sz HttpsWrite(web_https_provider *Provider, int Sock, web_string_view Res
 #endif // WEB_USE_HTTPS_OPENSSL
     case WEB_HTTPS_PROVIDER_CUSTOM: {
         web_https_custom_provider *Custom = (web_https_custom_provider *) Provider->Data;
-        return Custom->VTable->Write(Custom->Data, Sock, ResponseString.Items, ResponseString.Count);
+        return Custom->VTable.Write(Custom->Data, Sock, ResponseString.Items, ResponseString.Count);
     }
     }
 

@@ -476,6 +476,7 @@ static void SyncPoolFree(sync_pool *Pool, void *Item) {
 
 #define TCP_BACKLOG_SIZE 256
 
+// NOTE(oleh): This is bad.
 #define DEFAULT_REQUEST_ARENA_CAPACITY (4ll * 1024ll * 1024ll * 1024ll)
 
 typedef struct {
@@ -484,6 +485,79 @@ typedef struct {
     web_http_server *Server;
     int ClientSock;
 } worker_data;
+
+#ifdef WEB_USE_HTTPS
+static sz HttpsRead(web_https_provider *Provider, int Sock, u8 *Buffer, uz BufferCapacity) {
+    switch (Provider->Type) {
+#ifdef WEB_USE_HTTPS_OPENSSL
+    case WEB_HTTPS_PROVIDER_OPENSSL: {
+        SSL *Ssl = (SSL *)Provider->Data;
+        return SSL_read(Ssl, Buffer, BufferCapacity);
+    }
+#endif // WEB_USE_HTTPS_OPENSSL
+    case WEB_HTTPS_PROVIDER_CUSTOM: {
+        web_https_custom_provider *Custom = (web_https_custom_provider *)Provider->Data;
+        return Custom->VTable->Read(Custom->Data, Sock, Buffer, BufferCapacity);
+    }
+    }
+
+    WEB_UNREACHABLE();
+}
+#endif // WEB_USE_HTTPS
+
+// TODO(oleh): Get the error string.
+static sz HttpRequestReceive(worker_data *WorkerData, u8 *Buffer, uz BufferCapacity) {
+#ifdef WEB_USE_HTTPS
+    sz NumRead = 0;
+
+    if (WorkerData->Server->UseHttps) {
+        WEB_ASSERT(WorkerData->Server->HttpsProvider != NULL);
+        NumRead = HttpsRead(WorkerData->Server->HttpsProvider,
+                            WorkerData->ClientSock,
+                            Buffer,
+                            BufferCapacity);
+    } else {
+        NumRead = read(WorkerData->ClientSock, Buffer, BufferCapacity);
+    }
+
+    return NumRead;
+#else
+    return read(WorkerData->ClientSock, Buffer, BufferCapacity);
+#endif // WEB_USE_HTTPS
+}
+
+#ifdef WEB_USE_HTTPS
+static sz HttpsWrite(web_https_provider *Provider, int Sock, web_string_view ResponseString) {
+    switch (Provider->Type) {
+#ifdef WEB_USE_HTTPS_OPENSSL
+    case WEB_HTTPS_PROVIDER_OPENSSL: {
+        SSL *Ssl = (SSL *) Provider->Data;
+        return SSL_write(Ssl, ResponseString.Items, ResponseString.Count);
+    }
+#endif // WEB_USE_HTTPS_OPENSSL
+    case WEB_HTTPS_PROVIDER_CUSTOM: {
+        web_https_custom_provider *Custom = (web_https_custom_provider *) Provider->Data;
+        return Custom->VTable->Write(Custom->Data, Sock, ResponseString.Items, ResponseString.Count);
+    }
+    }
+
+    WEB_UNREACHABLE();
+}
+#endif // WEB_USE_HTTPS
+
+// TODO(oleh): Get the error string.
+static sz HttpResponseSend(worker_data *WorkerData, web_string_view ResponseString) {
+#ifdef WEB_USE_HTTPS
+    if (WorkerData->Server->UseHttps) {
+        WEB_ASSERT(WorkerData->Server->HttpsProvider != NULL);
+        return HttpsWrite(WorkerData->Server->HttpsProvider, WorkerData->ClientSock, ResponseString);
+    } else {
+        return write(WorkerData->ClientSock, ResponseString.Items, ResponseString.Count);
+    }
+#else
+    return write(WorkerData->ClientSock, ResponseString.Items, ResponseString.Count);
+#endif // WEB_USE_HTTPS
+}
 
 static void ServerWorker(void *Arg) {
     worker_data *Data = (worker_data *)Arg;
@@ -498,7 +572,8 @@ static void ServerWorker(void *Arg) {
     const uz ParseBufferCapacity = 1024 * 1024 * 4;
     u8 *ParseBufferItems = WebArenaPush(&Ctx->Arena, ParseBufferCapacity);
 
-    ssize_t ReceivedBytesCount = recv(Data->ClientSock, ParseBufferItems, ParseBufferCapacity, 0);
+    sz ReceivedBytesCount = HttpRequestReceive(Data, ParseBufferItems, ParseBufferCapacity);
+
     if (ReceivedBytesCount == -1) {
         printf("Could not receive data from the socket\n");
         goto Cleanup;
@@ -539,8 +614,8 @@ static void ServerWorker(void *Arg) {
                                                         WEB_SV_ARG(ResponseHeadersString),
                                                         WEB_SV_ARG(Ctx->Content));
 
-        int SendStatus = send(Data->ClientSock, ResponseString.Items, ResponseString.Count, 0);
-        WEB_ASSERT(SendStatus != -1);
+        sz NumSent = HttpResponseSend(Data, ResponseString);
+        WEB_ASSERT(NumSent != -1);
 
         goto Cleanup;
     }

@@ -5,6 +5,10 @@
 #include "json.h"
 #include "threadpool.h"
 
+#ifdef WEB_USE_HTTPS
+#include "https.h"
+#endif // WEB_USE_HTTPS
+
 #ifdef __cplusplus
     extern "C" {
 #endif
@@ -157,10 +161,20 @@ typedef struct {
     uz HandlersCount;
     uz ThreadsCount;
     web_thread_pool ThreadPool;
+
+#ifdef WEB_USE_HTTPS
+    b32 UseHttps;
+    web_https_provider *HttpsProvider;
+#endif // WEB_USE_HTTPS
 } web_http_server;
 
 typedef struct {
     s16 NumThreads;
+
+#ifdef WEB_USE_HTTPS
+    b32 UseHttps;
+    web_https_provider *HttpsProvider;
+#endif // WEB_USE_HTTPS
 } web_http_server_config;
 
 b32 WebHttpServerInit(web_http_server *, web_http_server_config *);

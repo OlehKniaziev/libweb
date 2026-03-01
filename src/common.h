@@ -8,12 +8,20 @@
 #include <stdlib.h>
 #include <stdarg.h>
 
-#define WEB_ASSERT(X) do {                                                  \
+#define _WEB_DO_ASSERT(Msg, X) do {                                                  \
         if (!(X)) {                                                     \
-            fprintf(stderr, "%s:%d: ASSERTION FAILED: %s\n", __FILE__, __LINE__, #X); \
+    fprintf(stderr, "%s:%d: " Msg ": %s\n", __FILE__, __LINE__, #X); \
             abort();                                                    \
         }                                                               \
-    } while (0)
+} while (0)
+
+#define WEB_VERIFY(X) _WEB_DO_ASSERT("VERIFICATION FAILED", (X))
+
+#ifndef WEB_STRIP_ASSERTS
+#    define WEB_ASSERT(X) _WEB_DO_ASSERT("ASSERTION FAILED", (X))
+#else
+#    define WEB_ASSERT(X)
+#endif // WEB_STRIP_ASSERTS
 
 #define WEB_MEMORY_ZERO(Ptr, Size) (memset((Ptr), 0, (Size)))
 

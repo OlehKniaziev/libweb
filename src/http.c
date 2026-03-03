@@ -733,6 +733,33 @@ void WebHttpServerAttachHandler(web_http_server *Server, const char *Path, web_h
 }
 
 b32 WebHttpServerInit(web_http_server *Server, web_http_server_config *Config) {
+#if WEB_USE_HTTPS
+    Server->UseHttps = Config->UseHttps;
+    Server->HttpsProvider = Config->HttpsProvider;
+
+    if (Config->UseHttps) {
+        WEB_VERIFY(Config->HttpsProvider != NULL);
+
+        switch (Config->HttpsProvider->Type) {
+#if WEB_USE_HTTPS_OPENSSL
+        case WEB_HTTPS_PROVIDER_OPENSSL: {
+            WEB_VERIFY(Config->HttpsProvider->Data == NULL);
+
+            OpenSSL_add_all_algorithms();
+            SSL_load_error_strings();
+
+            SSL_CTX *SslCtx = SSL_CTX_new(TLS_server_method());
+            WEB_VERIFY(SslCtx != NULL);
+
+            SSL *Ssl = SSL_new(SslCtx);
+            Config->HttpsProvider->Data = Ssl;
+        }
+        case WEB_HTTPS_PROVIDER_CUSTOM: break;
+        }
+    }
+#endif // WEB_USE_HTTPS_OPENSSL
+#endif // WEB_USE_HTTPS
+
     WebArenaInit(&Server->Arena, HTTP_SERVER_ARENA_CAPACITY);
 
     Server->Handlers = WebArenaPush(&Server->Arena, sizeof(*Server->Handlers) * HTTP_SERVER_MAX_HANDLERS);

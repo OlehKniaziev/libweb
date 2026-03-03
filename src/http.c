@@ -766,3 +766,7 @@ void WebHttpContextAddHeader(web_http_response_context *Ctx, web_string_view Nam
     };
     WEB_ARRAY_PUSH(&Ctx->Arena, &Ctx->ResponseHeaders, Header);
 }
+
+void WebHttpResponseWrite(web_http_response_context *Ctx, web_string_view Response) {
+    Ctx->Content = Response;
+}

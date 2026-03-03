@@ -486,7 +486,6 @@ typedef struct {
     int ClientSock;
 } worker_data;
 
-#ifdef WEB_USE_HTTPS
 static sz HttpsRead(web_https_provider *Provider, int Sock, u8 *Buffer, uz BufferCapacity) {
     switch (Provider->Type) {
 #ifdef WEB_USE_HTTPS_OPENSSL
@@ -503,11 +502,9 @@ static sz HttpsRead(web_https_provider *Provider, int Sock, u8 *Buffer, uz Buffe
 
     WEB_UNREACHABLE();
 }
-#endif // WEB_USE_HTTPS
 
 // TODO(oleh): Get the error string.
 static sz HttpRequestReceive(worker_data *WorkerData, u8 *Buffer, uz BufferCapacity) {
-#ifdef WEB_USE_HTTPS
     sz NumRead = 0;
 
     if (WorkerData->Server->UseHttps) {
@@ -521,12 +518,8 @@ static sz HttpRequestReceive(worker_data *WorkerData, u8 *Buffer, uz BufferCapac
     }
 
     return NumRead;
-#else
-    return read(WorkerData->ClientSock, Buffer, BufferCapacity);
-#endif // WEB_USE_HTTPS
 }
 
-#ifdef WEB_USE_HTTPS
 static sz HttpsWrite(web_https_provider *Provider, int Sock, web_string_view ResponseString) {
     switch (Provider->Type) {
 #ifdef WEB_USE_HTTPS_OPENSSL
@@ -543,20 +536,15 @@ static sz HttpsWrite(web_https_provider *Provider, int Sock, web_string_view Res
 
     WEB_UNREACHABLE();
 }
-#endif // WEB_USE_HTTPS
 
 // TODO(oleh): Get the error string.
 static sz HttpResponseSend(worker_data *WorkerData, web_string_view ResponseString) {
-#ifdef WEB_USE_HTTPS
     if (WorkerData->Server->UseHttps) {
         WEB_ASSERT(WorkerData->Server->HttpsProvider != NULL);
         return HttpsWrite(WorkerData->Server->HttpsProvider, WorkerData->ClientSock, ResponseString);
     } else {
         return write(WorkerData->ClientSock, ResponseString.Items, ResponseString.Count);
     }
-#else
-    return write(WorkerData->ClientSock, ResponseString.Items, ResponseString.Count);
-#endif // WEB_USE_HTTPS
 }
 
 static void ServerWorker(void *Arg) {
@@ -733,7 +721,6 @@ void WebHttpServerAttachHandler(web_http_server *Server, const char *Path, web_h
 }
 
 b32 WebHttpServerInit(web_http_server *Server, web_http_server_config *Config) {
-#if WEB_USE_HTTPS
     Server->UseHttps = Config->UseHttps;
     Server->HttpsProvider = Config->HttpsProvider;
 
@@ -754,11 +741,10 @@ b32 WebHttpServerInit(web_http_server *Server, web_http_server_config *Config) {
             SSL *Ssl = SSL_new(SslCtx);
             Config->HttpsProvider->Data = Ssl;
         }
+#endif // WEB_USE_HTTPS_OPENSSL
         case WEB_HTTPS_PROVIDER_CUSTOM: break;
         }
     }
-#endif // WEB_USE_HTTPS_OPENSSL
-#endif // WEB_USE_HTTPS
 
     WebArenaInit(&Server->Arena, HTTP_SERVER_ARENA_CAPACITY);
 
@@ -767,7 +753,7 @@ b32 WebHttpServerInit(web_http_server *Server, web_http_server_config *Config) {
 
     Server->HandlersCount = 0;
 
-    Server->ThreadsCount = Config->NumThreads;
+    Server->ThreadsCount = Config->NumThreads || 1;
 
     web_thread_pool_config ThreadPoolConfig = {.NumThreads = Server->ThreadsCount};
     return WebThreadPoolInit(&Server->ThreadPool, &Server->Arena, &ThreadPoolConfig);

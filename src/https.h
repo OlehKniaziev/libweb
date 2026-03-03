@@ -1,10 +1,6 @@
 #ifndef HTTPS_H_
 #define HTTPS_H_
 
-#ifndef WEB_USE_HTTPS
-#error "Define 'WEB_USE_HTTPS' to use this file"
-#endif // WEB_USE_HTTPS
-
 #ifdef WEB_USE_HTTPS_OPENSSL
 #include <openssl/ssl.h>
 #endif // WEB_USE_HTTPS_OPENSSL

@@ -1,14 +1,32 @@
 #!/bin/sh
 
-set -xe
+set -e
 
-FLAGS="-g -Wall -Wextra -Werror -pedantic -Og -c -fpic"
+FLAGS="-g -Wall -Wextra -Werror -pedantic -Og -fpic"
+BUILDTYPE=static
 
-if [ "$1" = "https" ]; then
-    FLAGS=$FLAGS" -DWEB_USE_HTTPS"
-elif [ "$1" = "openssl" ]; then
-    FLAGS=$FLAGS" -DWEB_USE_HTTPS -DWEB_USE_HTTPS_OPENSSL"
+while getopts "de" flag; do
+    case $flag in
+        d)
+            BUILDTYPE=dynamic
+        ;;
+        e)
+            FLAGS=$FLAGS" -DWEB_USE_HTTPS_OPENSSL -lssl -lcrypto"
+        ;;
+        \?)
+            echo "Unrecognized flag '$flag'"
+        ;;
+    esac
+done
+
+if [ "$BUILDTYPE" = "dynamic" ]; then
+    FLAGS=$FLAGS" -shared -olibweb.so"
+else
+    FLAGS=$FLAGS" -c"
 fi
 
 cc $FLAGS src/http.c src/json.c src/common.c src/base64.c src/threadpool.c
-ar rcs libweb.a http.o json.o common.o base64.o threadpool.o
+
+if [ "$BUILDTYPE" = "static" ]; then
+    ar rcs libweb.a http.o json.o common.o base64.o threadpool.o
+fi

@@ -8,3 +8,4 @@
 - [ ] Make HTTPS work with certificates and stuff
 - [ ] Replace all panics and error verifications by actual error handling
 - [ ] Fix the bug (try to curl multiple times)
+- [ ] Update the README, this library has some serious stuff by now

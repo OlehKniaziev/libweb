@@ -44,7 +44,7 @@ void WebLog(web_log_level Level,
 
     if (LogSource) {
         fprintf(LogDestination,
-                "[%s][%s] <%s:%d(%s)> %s",
+                "[%s][%s] <%s:%d(%s)> %s\n",
                 LevelStr,
                 ScopeStr,
                 Source.FileName,
@@ -52,7 +52,7 @@ void WebLog(web_log_level Level,
                 Source.ProcName,
                 Message);
     } else {
-        fprintf(LogDestination, "[%s][%s] %s", LevelStr, ScopeStr, Message);
+        fprintf(LogDestination, "[%s][%s] %s\n", LevelStr, ScopeStr, Message);
     }
 }
 

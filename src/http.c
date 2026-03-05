@@ -1,5 +1,6 @@
 #include "http.h"
 #include "threadpool.h"
+#include "log.h"
 
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -547,6 +548,23 @@ static sz HttpResponseSend(worker_data *WorkerData, web_string_view ResponseStri
     }
 }
 
+static sz HttpsCloseConnection(web_https_provider *Provider, int ClientSock) {
+    switch (Provider->Type) {
+#ifdef WEB_USE_HTTPS_OPENSSL
+    case WEB_HTTPS_PROVIDER_OPENSSL: {
+        SSL *Ssl = (SSL *) Provider->Data;
+        return SSL_shutdown(Ssl);
+    }
+#endif // WEB_USE_HTTPS_OPENSSL
+    case WEB_HTTPS_PROVIDER_CUSTOM: {
+        web_https_custom_provider *Custom = (web_https_custom_provider *) Provider->Data;
+        return Custom->VTable.CloseConnection(Custom->Data, ClientSock);
+    }
+    }
+
+    WEB_UNREACHABLE();
+}
+
 static void ServerWorker(void *Arg) {
     worker_data *Data = (worker_data *)Arg;
 
@@ -603,7 +621,7 @@ static void ServerWorker(void *Arg) {
                                                         WEB_SV_ARG(Ctx->Content));
 
         sz NumSent = HttpResponseSend(Data, ResponseString);
-        WEB_ASSERT(NumSent != -1);
+        WEB_VERIFY(NumSent > 0);
 
         goto Cleanup;
     }
@@ -623,6 +641,10 @@ static void ServerWorker(void *Arg) {
     WEB_ASSERT(SendStatus != -1);
 
 Cleanup:
+    if (Data->Server->UseHttps) {
+        HttpsCloseConnection(Data->Server->HttpsProvider, Data->ClientSock);
+    }
+
     close(Data->ClientSock);
 
     SyncPoolFree(Data->ContextPool, Ctx);
@@ -640,6 +662,41 @@ static void *NewContextPoolProc(uz *Size) {
     WEB_STRUCT_ZERO(ResponseContext);
     WebArenaInit(&ResponseContext->Arena, DEFAULT_REQUEST_ARENA_CAPACITY);
     return ResponseContext;
+}
+
+static int HttpsAcceptConnection(web_https_provider *Provider, int ClientSock) {
+    switch (Provider->Type) {
+#ifdef WEB_USE_HTTPS_OPENSSL
+    case WEB_HTTPS_PROVIDER_OPENSSL: {
+        SSL *Ssl = (SSL *) Provider->Data;
+        SSL_set_fd(Ssl, ClientSock);
+        return SSL_accept(Ssl);
+    }
+#endif // WEB_USE_HTTPS_OPENSSL
+    case WEB_HTTPS_PROVIDER_CUSTOM: {
+        web_https_custom_provider *Custom = (web_https_custom_provider *) Provider->Data;
+        return Custom->VTable.AcceptConnection(Custom->Data, ClientSock);
+    }
+    }
+
+    WEB_UNREACHABLE();
+}
+
+static const char *HttpsGetErrorString(web_https_provider *Provider, int Error) {
+    switch (Provider->Type) {
+#ifdef WEB_USE_HTTPS_OPENSSL
+    case WEB_HTTPS_PROVIDER_OPENSSL: {
+        uz SslError = ERR_get_error();
+        return ERR_error_string(SslError, NULL);
+    }
+#endif // WEB_USE_HTTPS_OPENSSL
+    case WEB_HTTPS_PROVIDER_CUSTOM: {
+        web_https_custom_provider *Custom = (web_https_custom_provider *) Provider->Data;
+        return Custom->VTable.GetErrorString(Custom->Data, Error);
+    }
+    }
+
+    WEB_UNREACHABLE();
 }
 
 void WebHttpServerStart(web_http_server *Server, u16 Port) {
@@ -687,10 +744,25 @@ void WebHttpServerStart(web_http_server *Server, u16 Port) {
 
     while (1) {
         int ClientSock = accept(ServerSock, (struct sockaddr*)&ClientAddr, &ClientAddrSize);
+
         if (ClientSock == -1) {
             int AcceptError = errno;
             close(ServerSock);
             WEB_PANIC_FMT("Could not accept a new connection: %s", strerror(AcceptError));
+        }
+
+        if (Server->UseHttps) {
+            int Status = HttpsAcceptConnection(Server->HttpsProvider, ClientSock);
+
+            if (Status < 0) {
+                const char *ErrorString = HttpsGetErrorString(Server->HttpsProvider, Status);
+                (void) ErrorString;
+                WEB_LOG_FATAL_FMT("Sum SSL bullshit: %s", ErrorString);
+            } else if (Status == 0) {
+                WEB_LOG(INFO, TLS, "Client reset TLS connection");
+                close(ClientSock);
+                continue;
+            }
         }
 
         worker_data *WorkerData = SyncPoolAlloc(&WorkerDataPool);
@@ -720,6 +792,46 @@ void WebHttpServerAttachHandler(web_http_server *Server, const char *Path, web_h
     ++Server->HandlersCount;
 }
 
+static void HttpsInit(web_https_provider *Provider) {
+    switch (Provider->Type) {
+#if WEB_USE_HTTPS_OPENSSL
+    case WEB_HTTPS_PROVIDER_OPENSSL: {
+        WEB_VERIFY(Provider->Data != NULL);
+
+        web_https_openssl_provider_config *Conf = (web_https_openssl_provider_config *) Provider->Data;
+
+        SSL_load_error_strings();
+        ERR_load_crypto_strings();
+        OpenSSL_add_all_algorithms();
+
+        SSL_CTX *SslCtx = SSL_CTX_new(TLS_server_method());
+        WEB_VERIFY(SslCtx != NULL);
+
+        SSL_CTX_set_ecdh_auto(SslCtx, 1);
+
+        int Ret = SSL_CTX_use_certificate_file(SslCtx, Conf->CertificateFileName, SSL_FILETYPE_PEM);
+        WEB_VERIFY(Ret > 0);
+
+        Ret = SSL_CTX_use_PrivateKey_file(SslCtx, Conf->PrivateKeyFileName, SSL_FILETYPE_PEM);
+        WEB_VERIFY(Ret > 0);
+
+        SSL *Ssl = SSL_new(SslCtx);
+        Provider->Data = Ssl;
+
+        return;
+    }
+#endif // WEB_USE_HTTPS_OPENSSL
+    case WEB_HTTPS_PROVIDER_CUSTOM: {
+        web_https_custom_provider *Custom = (web_https_custom_provider *) Provider->Data;
+        Custom->VTable.Init(Custom->Data);
+
+        return;
+    }
+    }
+
+    WEB_UNREACHABLE();
+}
+
 b32 WebHttpServerInit(web_http_server *Server, web_http_server_config *Config) {
     Server->UseHttps = Config->UseHttps;
     Server->HttpsProvider = Config->HttpsProvider;
@@ -727,23 +839,7 @@ b32 WebHttpServerInit(web_http_server *Server, web_http_server_config *Config) {
     if (Config->UseHttps) {
         WEB_VERIFY(Config->HttpsProvider != NULL);
 
-        switch (Config->HttpsProvider->Type) {
-#if WEB_USE_HTTPS_OPENSSL
-        case WEB_HTTPS_PROVIDER_OPENSSL: {
-            WEB_VERIFY(Config->HttpsProvider->Data == NULL);
-
-            OpenSSL_add_all_algorithms();
-            SSL_load_error_strings();
-
-            SSL_CTX *SslCtx = SSL_CTX_new(TLS_server_method());
-            WEB_VERIFY(SslCtx != NULL);
-
-            SSL *Ssl = SSL_new(SslCtx);
-            Config->HttpsProvider->Data = Ssl;
-        }
-#endif // WEB_USE_HTTPS_OPENSSL
-        case WEB_HTTPS_PROVIDER_CUSTOM: break;
-        }
+        HttpsInit(Config->HttpsProvider);
     }
 
     WebArenaInit(&Server->Arena, HTTP_SERVER_ARENA_CAPACITY);

@@ -2,7 +2,7 @@
 
 set -e
 
-FLAGS="-g -Wall -Wextra -Werror -pedantic -Og -fpic"
+FLAGS="-g -Wall -Wextra -Werror -Og -fpic"
 BUILDTYPE=static
 
 while getopts "de" flag; do
@@ -25,8 +25,8 @@ else
     FLAGS=$FLAGS" -c"
 fi
 
-cc $FLAGS src/http.c src/json.c src/common.c src/base64.c src/threadpool.c
+cc $FLAGS src/http.c src/json.c src/common.c src/base64.c src/threadpool.c src/log.c
 
 if [ "$BUILDTYPE" = "static" ]; then
-    ar rcs libweb.a http.o json.o common.o base64.o threadpool.o
+    ar rcs libweb.a http.o json.o common.o base64.o threadpool.o src/log.h
 fi

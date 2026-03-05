@@ -53,6 +53,8 @@
 #define WEB_MIN(a, b) ((a) < (b) ? (a) : (b))
 #define WEB_MAX(a, b) ((a) > (b) ? (a) : (b))
 
+#define WEB_ARRAY_COUNT(Arr) (sizeof((Arr)) / (sizeof((Arr)[0])))
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -186,6 +188,10 @@ static inline char *WebStringViewCloneCStr(web_arena *Arena, web_string_view Sv)
     memcpy(Buffer, Sv.Items, Sv.Count);
     Buffer[Sv.Count] = '\0';
     return Buffer;
+}
+
+static inline char *WebStringViewCloneCStrMalloc(web_string_view Sv) {
+    return strndup((char *) Sv.Items, Sv.Count);
 }
 
 b32 WebReadFullFile(web_arena *Arena, const char *Path, web_string_view *OutContents);

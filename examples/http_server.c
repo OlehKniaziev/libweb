@@ -1,5 +1,6 @@
 #define WEB_USE_HTTPS_OPENSSL
 #include "../src/http.h"
+#include "../src/log.h"
 
 web_http_response_status HelloHandler(web_http_response_context *Ctx) {
     WebHttpResponseWrite(Ctx, WEB_SV_LIT("Hello!"));
@@ -7,14 +8,10 @@ web_http_response_status HelloHandler(web_http_response_context *Ctx) {
 }
 
 int main() {
+    WebLogSetDestination(stdout);
+
     web_http_server Server = {0};
-    web_https_provider Provider = {
-        .Type = WEB_HTTPS_PROVIDER_OPENSSL,
-    };
-    web_http_server_config Config = {
-        .UseHttps = 0,
-        .HttpsProvider = &Provider,
-    };
+    web_http_server_config Config = {0};
 
     WEB_VERIFY(WebHttpServerInit(&Server, &Config));
 

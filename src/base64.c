@@ -173,11 +173,11 @@ void WebBase64Encode(web_string_view InputBuffer, u8 *OutputBuffer, uz *OutputBu
         OutputBuffer[OutputCount++] = OutputByte;
 
         if (OutputCount >= *OutputBufferCount) goto End;
-        OutputByte = EncodeTable[(Bytes >> 4) & 0xFFF];
+        OutputByte = EncodeTable[(Bytes >> 4) & 0x3F];
         OutputBuffer[OutputCount++] = OutputByte;
 
         if (OutputCount >= *OutputBufferCount) goto End;
-        OutputByte = EncodeTable[(Bytes & 0xFF) << 2];
+        OutputByte = EncodeTable[(Bytes & 0x0F) << 2];
         OutputBuffer[OutputCount++] = OutputByte;
 
         if (OutputCount >= *OutputBufferCount) goto End;

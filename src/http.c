@@ -485,23 +485,11 @@ typedef struct {
     sync_pool *ContextPool;
     web_http_server *Server;
     int ClientSock;
+    web_https_session HttpsSession;
 } worker_data;
 
-static sz HttpsRead(web_https_provider *Provider, int Sock, u8 *Buffer, uz BufferCapacity) {
-    switch (Provider->Type) {
-#ifdef WEB_USE_HTTPS_OPENSSL
-    case WEB_HTTPS_PROVIDER_OPENSSL: {
-        SSL *Ssl = (SSL *)Provider->Data;
-        return SSL_read(Ssl, Buffer, BufferCapacity);
-    }
-#endif // WEB_USE_HTTPS_OPENSSL
-    case WEB_HTTPS_PROVIDER_CUSTOM: {
-        web_https_custom_provider *Custom = (web_https_custom_provider *)Provider->Data;
-        return Custom->VTable.Read(Custom->Data, Sock, Buffer, BufferCapacity);
-    }
-    }
-
-    WEB_UNREACHABLE();
+static sz HttpsRead(web_https_session *Sess, u8 *Buffer, uz BufferCapacity) {
+    return Sess->VTable.Read(Sess->Data, Buffer, BufferCapacity);
 }
 
 // TODO(oleh): Get the error string.
@@ -509,9 +497,7 @@ static sz HttpRequestReceive(worker_data *WorkerData, u8 *Buffer, uz BufferCapac
     sz NumRead = 0;
 
     if (WorkerData->Server->UseHttps) {
-        WEB_ASSERT(WorkerData->Server->HttpsProvider != NULL);
-        NumRead = HttpsRead(WorkerData->Server->HttpsProvider,
-                            WorkerData->ClientSock,
+        NumRead = HttpsRead(&WorkerData->HttpsSession,
                             Buffer,
                             BufferCapacity);
     } else {
@@ -521,48 +507,21 @@ static sz HttpRequestReceive(worker_data *WorkerData, u8 *Buffer, uz BufferCapac
     return NumRead;
 }
 
-static sz HttpsWrite(web_https_provider *Provider, int Sock, web_string_view ResponseString) {
-    switch (Provider->Type) {
-#ifdef WEB_USE_HTTPS_OPENSSL
-    case WEB_HTTPS_PROVIDER_OPENSSL: {
-        SSL *Ssl = (SSL *) Provider->Data;
-        return SSL_write(Ssl, ResponseString.Items, ResponseString.Count);
-    }
-#endif // WEB_USE_HTTPS_OPENSSL
-    case WEB_HTTPS_PROVIDER_CUSTOM: {
-        web_https_custom_provider *Custom = (web_https_custom_provider *) Provider->Data;
-        return Custom->VTable.Write(Custom->Data, Sock, ResponseString.Items, ResponseString.Count);
-    }
-    }
-
-    WEB_UNREACHABLE();
+static sz HttpsWrite(web_https_session *Sess, web_string_view ResponseString) {
+    return Sess->VTable.Write(Sess->Data, ResponseString.Items, ResponseString.Count);
 }
 
 // TODO(oleh): Get the error string.
 static sz HttpResponseSend(worker_data *WorkerData, web_string_view ResponseString) {
     if (WorkerData->Server->UseHttps) {
-        WEB_ASSERT(WorkerData->Server->HttpsProvider != NULL);
-        return HttpsWrite(WorkerData->Server->HttpsProvider, WorkerData->ClientSock, ResponseString);
+        return HttpsWrite(&WorkerData->HttpsSession, ResponseString);
     } else {
         return write(WorkerData->ClientSock, ResponseString.Items, ResponseString.Count);
     }
 }
 
-static sz HttpsCloseConnection(web_https_provider *Provider, int ClientSock) {
-    switch (Provider->Type) {
-#ifdef WEB_USE_HTTPS_OPENSSL
-    case WEB_HTTPS_PROVIDER_OPENSSL: {
-        SSL *Ssl = (SSL *) Provider->Data;
-        return SSL_shutdown(Ssl);
-    }
-#endif // WEB_USE_HTTPS_OPENSSL
-    case WEB_HTTPS_PROVIDER_CUSTOM: {
-        web_https_custom_provider *Custom = (web_https_custom_provider *) Provider->Data;
-        return Custom->VTable.CloseConnection(Custom->Data, ClientSock);
-    }
-    }
-
-    WEB_UNREACHABLE();
+static sz HttpsCloseConnection(web_https_session *Sess) {
+    return Sess->VTable.Close(Sess->Data);
 }
 
 static void ServerWorker(void *Arg) {
@@ -642,7 +601,7 @@ static void ServerWorker(void *Arg) {
 
 Cleanup:
     if (Data->Server->UseHttps) {
-        HttpsCloseConnection(Data->Server->HttpsProvider, Data->ClientSock);
+        HttpsCloseConnection(&Data->HttpsSession);
     }
 
     close(Data->ClientSock);
@@ -664,18 +623,28 @@ static void *NewContextPoolProc(uz *Size) {
     return ResponseContext;
 }
 
-static int HttpsAcceptConnection(web_https_provider *Provider, int ClientSock) {
+static int HttpsAcceptConnection(web_https_provider *Provider, int ClientSock, web_https_session *Sess) {
     switch (Provider->Type) {
 #ifdef WEB_USE_HTTPS_OPENSSL
     case WEB_HTTPS_PROVIDER_OPENSSL: {
-        SSL *Ssl = (SSL *) Provider->Data;
+        static web_https_session_vtable OpenSSLSessionVTable = {
+            .Read = OpenSSLSessionRead,
+            .Write = OpenSSLSessionWrite,
+            .Close = OpenSSLSessionClose,
+        };
+
+        SSL_CTX *SslCtx = (SSL_CTX *) Provider->Data;
+        SSL *Ssl = SSL_new(SslCtx);
         SSL_set_fd(Ssl, ClientSock);
+        Sess->Data = Ssl;
+        Sess->VTable = OpenSSLSessionVTable;
+
         return SSL_accept(Ssl);
     }
 #endif // WEB_USE_HTTPS_OPENSSL
     case WEB_HTTPS_PROVIDER_CUSTOM: {
         web_https_custom_provider *Custom = (web_https_custom_provider *) Provider->Data;
-        return Custom->VTable.AcceptConnection(Custom->Data, ClientSock);
+        return Custom->VTable.AcceptConnection(Custom->Data, ClientSock, Sess);
     }
     }
 
@@ -751,8 +720,10 @@ void WebHttpServerStart(web_http_server *Server, u16 Port) {
             WEB_PANIC_FMT("Could not accept a new connection: %s", strerror(AcceptError));
         }
 
+        web_https_session HttpsSession = {0};
+
         if (Server->UseHttps) {
-            int Status = HttpsAcceptConnection(Server->HttpsProvider, ClientSock);
+            int Status = HttpsAcceptConnection(Server->HttpsProvider, ClientSock, &HttpsSession);
 
             if (Status < 0) {
                 const char *ErrorString = HttpsGetErrorString(Server->HttpsProvider, Status);
@@ -770,6 +741,7 @@ void WebHttpServerStart(web_http_server *Server, u16 Port) {
         WorkerData->Server = Server;
         WorkerData->ContextPool = &ContextPool;
         WorkerData->ClientSock = ClientSock;
+        WorkerData->HttpsSession = HttpsSession;
 
         web_thread_pool_task Task = {.Proc = ServerWorker, .Arg = WorkerData};
         WebThreadPoolScheduleTask(&Server->ThreadPool, Task);
@@ -815,8 +787,7 @@ static void HttpsInit(web_https_provider *Provider) {
         Ret = SSL_CTX_use_PrivateKey_file(SslCtx, Conf->PrivateKeyFileName, SSL_FILETYPE_PEM);
         WEB_VERIFY(Ret > 0);
 
-        SSL *Ssl = SSL_new(SslCtx);
-        Provider->Data = Ssl;
+        Provider->Data = SslCtx;
 
         return;
     }

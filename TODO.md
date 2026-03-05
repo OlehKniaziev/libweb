@@ -6,3 +6,5 @@
 - [ ] Check the OpenSSL multithreading error stuff
 - [ ] Fix all `TODOs` in code
 - [ ] Make HTTPS work with certificates and stuff
+- [ ] Replace all panics and error verifications by actual error handling
+- [ ] Fix the bug (try to curl multiple times)

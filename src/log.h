@@ -6,6 +6,7 @@
 #include <stdio.h>
 
 #define WEB_ENUM_LOG_LEVELS \
+    X(DEBUG) \
     X(INFO) \
     X(WARN) \
     X(ERROR) \

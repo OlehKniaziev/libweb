@@ -554,6 +554,8 @@ static void ServerWorker(void *Arg) {
         goto Cleanup;
     }
 
+    Ctx->Request = HttpRequest;
+
     for (uz HandlerIndex = 0; HandlerIndex < Data->Server->HandlersCount; ++HandlerIndex) {
         web_string_view HandlerPath = Data->Server->HandlersPaths[HandlerIndex];
         if (!WebStringViewEqual(HandlerPath, HttpRequest.Path)) continue;

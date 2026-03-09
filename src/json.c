@@ -430,33 +430,61 @@ void WebJsonEndArray(void) {
     CurrentJsonState = STATE_DIRTY;
 }
 
-void WebJsonPutKey(web_string_view Key) {
-    uz BytesRequired;
+#define CHECK_CAP() do { if (Offset >= CurrentJsonArena->Capacity) { \
+WEB_PANIC("Arena does not have enough capacity"); \
+} } while (0)
 
-    if (CurrentJsonState == STATE_CLEAN) {
-        BytesRequired = Key.Count + 3;
+static uz JsonPutStringWithEscaping(web_string_view String, uz Offset) {
+    CHECK_CAP();
 
-        WEB_ASSERT(CurrentJsonArena->Capacity - CurrentJsonArena->Offset >= BytesRequired);
+    CurrentJsonArena->Items[Offset] = '"';
+    ++Offset;
 
-        u8 *Ptr = CurrentJsonArena->Items + CurrentJsonArena->Offset;
-        *Ptr = '"';
-        memcpy(Ptr + 1, Key.Items, Key.Count);
-        Ptr[Key.Count + 1] = '"';
-        Ptr[Key.Count + 2] = ':';
-    } else {
-        BytesRequired = Key.Count + 4;
+    for (uz StringIndex = 0; StringIndex < String.Count; ++StringIndex) {
+        u8 Char = String.Items[StringIndex];
 
-        WEB_ASSERT(CurrentJsonArena->Capacity - CurrentJsonArena->Offset >= BytesRequired);
+        if (Char == '"') {
+            CHECK_CAP();
 
-        u8 *Ptr = CurrentJsonArena->Items + CurrentJsonArena->Offset;
-        *Ptr = ',';
-        Ptr[1] = '"';
-        memcpy(Ptr + 2, Key.Items, Key.Count);
-        Ptr[Key.Count + 2] = '"';
-        Ptr[Key.Count + 3] = ':';
+            CurrentJsonArena->Items[Offset] = '\\';
+            CurrentJsonArena->Items[Offset + 1] = '"';
+
+            Offset += 2;
+        } else {
+            CHECK_CAP();
+
+            CurrentJsonArena->Items[Offset] = Char;
+            ++Offset;
+        }
     }
 
-    CurrentJsonArena->Offset += BytesRequired;
+    CHECK_CAP();
+
+    CurrentJsonArena->Items[Offset] = '"';
+    ++Offset;
+
+    return Offset;
+}
+
+
+void WebJsonPutKey(web_string_view Key) {
+    uz Offset = CurrentJsonArena->Offset;
+
+    if (CurrentJsonState == STATE_DIRTY) {
+        CHECK_CAP();
+
+        CurrentJsonArena->Items[Offset] = ',';
+        ++Offset;
+    }
+
+    Offset = JsonPutStringWithEscaping(Key, Offset);
+
+    CHECK_CAP();
+
+    CurrentJsonArena->Items[Offset] = ':';
+    ++Offset;
+
+    CurrentJsonArena->Offset = Offset;
 }
 
 static void WebJsonPutSpecial(web_string_view Special) {
@@ -505,16 +533,15 @@ void WebJsonPutNumber(f64 Number) {
 }
 
 void WebJsonPutString(web_string_view String) {
-    uz BytesRequired = String.Count + 2;
-    WEB_ASSERT(CurrentJsonArena->Capacity - CurrentJsonArena->Offset >= BytesRequired);
+    uz MinBytesRequired = String.Count + 2;
+    WEB_ASSERT(WebArenaAvail(CurrentJsonArena) >= MinBytesRequired);
 
-    u8 *Ptr = CurrentJsonArena->Items + CurrentJsonArena->Offset;
-    Ptr[0] = '"';
-    memcpy(Ptr + 1, String.Items, String.Count);
-    Ptr[String.Count + 1] = '"';
+    uz Offset = CurrentJsonArena->Offset;
+
+    Offset = JsonPutStringWithEscaping(String, Offset);
 
     CurrentJsonState = STATE_DIRTY;
-    CurrentJsonArena->Offset += BytesRequired;
+    CurrentJsonArena->Offset = Offset;
 }
 
 void WebJsonPrepareArrayElement(void) {

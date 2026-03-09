@@ -1,4 +1,5 @@
 #include "../src/base64.h"
+#include "../src/json.h"
 
 #define SV_EQUAL(Lhs, Rhs) do { \
 if (!WebStringViewEqual((Lhs), (Rhs))) WEB_PANIC_FMT("Assertion failed: '" WEB_SV_FMT "' != '" WEB_SV_FMT "'", WEB_SV_ARG((Lhs)), WEB_SV_ARG((Rhs))); \
@@ -28,6 +29,27 @@ void TestBase64(void) {
     SV_EQUAL(Decoded, Input);
 }
 
+void TestJsonEncoding_StringEscaping(web_arena *Arena) {
+    WebJsonBegin(Arena);
+    WebJsonBeginObject();
+
+    WebJsonPutKey(WEB_SV_LIT("hello\""));
+    WebJsonPutString(WEB_SV_LIT("\"world\""));
+
+    WebJsonEndObject();
+    web_string_view Json = WebJsonEnd();
+
+    SV_EQUAL(Json, WEB_SV_LIT("{\"hello\\\"\":\"\\\"world\\\"\"}"));
+}
+
+void TestJsonEncoding(void) {
+    web_arena Arena;
+    WebArenaInit(&Arena, 2048);
+
+    TestJsonEncoding_StringEscaping(&Arena);
+}
+
 int main() {
     TestBase64();
+    TestJsonEncoding();
 }

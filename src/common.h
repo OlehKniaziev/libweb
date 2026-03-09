@@ -123,9 +123,13 @@ static inline uz WebAlignForward(uz Size, uz Alignment) {
     return Size + ((Alignment - (Size & (Alignment - 1))) & (Alignment - 1));
 }
 
+static inline uz WebArenaAvail(web_arena *Arena) {
+    return Arena->Capacity - Arena->Offset;
+}
+
 static inline void *WebArenaPush(web_arena *Arena, uz Size) {
     Size = WebAlignForward(Size, sizeof(uz));
-    uz AvailableBytes = Arena->Capacity - Arena->Offset;
+    uz AvailableBytes = WebArenaAvail(Arena);
     if (AvailableBytes < Size) WEB_PANIC_FMT("Arena out of memory for requested size %zu!", Size);
 
     void *Ptr = Arena->Items + Arena->Offset;

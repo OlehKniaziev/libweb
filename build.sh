@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 set -e
 
@@ -12,7 +12,7 @@ while getopts "de" flag; do
             BUILDTYPE=dynamic
         ;;
         e)
-            FLAGS=$FLAGS" -DWEB_USE_HTTPS_OPENSSL -lssl -lcrypto"
+            FLAGS=$FLAGS" -DWEB_USE_HTTPS_OPENSSL $(pkg-config --cflags --libs openssl)"
             SOURCES=$SOURCES" src/openssl.c"
         ;;
         \?)

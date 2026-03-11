@@ -106,6 +106,20 @@ static inline b32 WebJsonObjectGetArray(const web_json_object *Object, web_strin
     return 0;
 }
 
+static inline b32 WebJsonObjectGetObject(const web_json_object *Object, web_string_view Key, web_json_object *OutValue) {
+    web_json_value OutJsonValue;
+    if (!WebJsonObjectGet(Object, Key, &OutJsonValue)) {
+        return 0;
+    }
+
+    if (OutJsonValue.Type == JSON_OBJECT) {
+        *OutValue = OutJsonValue.Object;
+        return 1;
+    }
+
+    return 0;
+}
+
 #define WEB_ENUM_JSON_GETTERS \
     X(web_string_view) \
         X(f64) \
@@ -149,10 +163,6 @@ void WebJsonPutNull(void);
 void WebJsonPutKey(web_string_view);
 
 web_string_view WebJsonEnd(void);
-
-// Aliases for entity-type serializers.
-
-#define JsonPut_string_view JsonPutString
 
 #ifdef __cplusplus
 }

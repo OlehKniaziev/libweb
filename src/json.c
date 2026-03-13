@@ -369,11 +369,43 @@ b32 WebJsonObjectGet(const web_json_object *Object, web_string_view SearchKey, w
     return 0;
 }
 
-b32 JsonObjectGet_string_view(const web_json_object *Object, web_string_view Key, web_string_view *OutValue) {
-    web_json_value JsonValue;
-    if (!WebJsonObjectGet(Object, Key, &JsonValue)) return 0;
-    if (JsonValue.Type != JSON_STRING) return 0;
-    *OutValue = JsonValue.String;
+b32 WebJsonObjectGetU32(const web_json_object *Object, web_string_view Key, u32 *OutValue) {
+    f64 OutF64 = 0.0;
+    if (!WebJsonObjectGetNumber(Object, Key, &OutF64)) {
+        return 0;
+    }
+
+    f64 Integral;
+    f64 Fractional = modf(OutF64, &Integral);
+    if (Fractional != 0.0) {
+        return 0;
+    }
+
+    if (Integral < 0.0 || Integral > (f64) UINT32_MAX) {
+        return 0;
+    }
+
+    *OutValue = (u32) Integral;
+    return 1;
+}
+
+b32 WebJsonObjectGetU64(const web_json_object *Object, web_string_view Key, u64 *OutValue) {
+    f64 OutF64 = 0.0;
+    if (!WebJsonObjectGetNumber(Object, Key, &OutF64)) {
+        return 0;
+    }
+
+    f64 Integral;
+    f64 Fractional = modf(OutF64, &Integral);
+    if (Fractional != 0.0) {
+        return 0;
+    }
+
+    if (Integral < 0.0 || Integral > (f64) UINT64_MAX) {
+        return 0;
+    }
+
+    *OutValue = (u64) Integral;
     return 1;
 }
 

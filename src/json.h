@@ -75,6 +75,9 @@ static inline b32 WebJsonObjectGetNumber(const web_json_object *Object, web_stri
     return 0;
 }
 
+b32 WebJsonObjectGetU32(const web_json_object *, web_string_view, u32 *);
+b32 WebJsonObjectGetU64(const web_json_object *, web_string_view, u64 *);
+
 static inline b32 WebJsonObjectGetBool(const web_json_object *Object, web_string_view Key, b32 *OutValue) {
     web_json_value OutJsonValue;
     if (!WebJsonObjectGet(Object, Key, &OutJsonValue)) {
@@ -119,29 +122,6 @@ static inline b32 WebJsonObjectGetObject(const web_json_object *Object, web_stri
 
     return 0;
 }
-
-#define WEB_ENUM_JSON_GETTERS \
-    X(web_string_view) \
-        X(f64) \
-        X(u64) \
-        X(u32)
-
-#define X(Type) b32 WebJsonObjectGet_##Type(const web_json_object *Object, web_string_view Key, Type *OutValue);
-WEB_ENUM_JSON_GETTERS
-#undef X
-
-#define WebJsonObjectGet_web_string_view WebJsonObjectGetStringView
-
-#define OPTIONAL_GETTER(Type) \
-    static inline b32 WebJsonObjectGet_optional_##Type(const web_json_object *Object, web_string_view Key, optional_##Type *OutValue) { \
-        OutValue->HasValue = WebJsonObjectGet_##Type(Object, Key, &OutValue->Value); \
-        return 1;                                                       \
-    }
-
-#define X OPTIONAL_GETTER
-WEB_ENUM_JSON_GETTERS
-#undef X
-#undef OPTIONAL_GETTER
 
 void WebJsonBegin(web_arena *);
 

@@ -149,61 +149,65 @@ End:
     return Result;
 }
 
+static sz HttpRequestParseHeader(u8 *Buffer,
+                                 uz BufferCount,
+                                 web_http_header *Header) {
+    uz I = 0;
+
+    for (; I < BufferCount; ++I) {
+        if (Buffer[I] == ':') break;
+    }
+
+    if (I >= BufferCount) {
+        return -1;
+    }
+
+    Header->Name = (web_string_view) {.Items = Buffer, .Count = I};
+
+    uz HeaderValueStart = I + 2;
+
+    for (I = HeaderValueStart; I < BufferCount; ++I) {
+        if (Buffer[I] == '\r') break;
+    }
+
+    if (I >= BufferCount) {
+        return -1;
+    }
+
+    if (BufferCount - I <= 1) {
+        return -1;
+    }
+
+    u8 NewlineChar = Buffer[I + 1];
+    if (NewlineChar != '\n') {
+        return -1;
+    }
+
+    Header->Value = (web_string_view) {.Items = Buffer + HeaderValueStart, .Count = I - HeaderValueStart};
+
+    return I + 2;
+}
+
 // TODO(oleh): This should be more strict, i.e. now it does not check that the ':' is before the CRLF.
 static b32 HttpHeadersParse(web_arena *Arena,
                             web_string_view Buffer,
                             uz *Offset,
-                            web_http_headers *Headers,
-                            web_string_view *Error) {
+                            web_http_headers *Headers) {
     b32 Result = 1;
     uz I;
 
-    for (I = *Offset; I < Buffer.Count; ++I) {
+    for (I = *Offset; I < Buffer.Count; ) {
         if (Buffer.Items[I] == '\r' && Buffer.Count - I > 1 && Buffer.Items[I + 1] == '\n') goto Success;
 
-        uz HeaderNameStart = I;
-
-        for (; I < Buffer.Count; ++I) {
-            if (Buffer.Items[I] == ':') break;
-        }
-
-        if (I >= Buffer.Count) {
-            *Error = WEB_SV_LIT("could not locate the ':' in the header line");
+        web_http_header Header = {0};
+        sz N = HttpRequestParseHeader(Buffer.Items + I, Buffer.Count - I, &Header);
+        if (N == -1) {
             return 0;
         }
 
-        web_string_view HeaderName = {.Items = Buffer.Items + HeaderNameStart, .Count = I - HeaderNameStart};
-
-        uz HeaderValueStart = I + 1;
-
-        for (I = HeaderValueStart; I < Buffer.Count; ++I) {
-            if (Buffer.Items[I] == '\r') break;
-        }
-
-        if (I >= Buffer.Count) {
-            *Error = WEB_SV_LIT("could not locate the '\\r' in the header line");
-            return 0;
-        }
-
-        if (Buffer.Count - I <= 1) {
-            *Error = WEB_SV_LIT("unexpected EOF while looking for the CRLF");
-            return 0;
-        }
-
-        u8 NewlineChar = Buffer.Items[I + 1];
-        if (NewlineChar != '\n') {
-            *Error = WebArenaFormat(Arena,
-                                    "malformed CRLF sequence at the end of a header line: expected '\\n', got '%c' instead",
-                                    NewlineChar);
-            return 0;
-        }
-
-        web_string_view HeaderValue = {.Items = Buffer.Items + I + 2, .Count = I - HeaderValueStart - 2};
-
-        web_http_header Header = {.Name = HeaderName, .Value = HeaderValue};
+        I += N;
 
         WEB_ARRAY_PUSH(Arena, Headers, Header);
-        ++I;
     }
 
     Result = 0;
@@ -278,9 +282,7 @@ ResponseStatusSuccess: ;
     web_http_headers Headers;
     WEB_ARRAY_INIT(Arena, &Headers);
 
-    // TODO(oleh): Use this error.
-    web_string_view Error;
-    if (!HttpHeadersParse(Arena, Buffer, &I, &Headers, &Error)) return 0;
+    if (!HttpHeadersParse(Arena, Buffer, &I, &Headers)) return 0;
 
     web_string_view ResponseBody = {.Items = Buffer.Items + I, .Count = Buffer.Count - I};
 
@@ -291,22 +293,22 @@ ResponseStatusSuccess: ;
     return 1;
 }
 
-b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_request *OutRequest, web_string_view *Error) {
-    // 1. Request line. (https://datatracker.ietf.org/doc/html/rfc2616#section-5.1)
-    // 1.1. Method. (https://datatracker.ietf.org/doc/html/rfc2616#section-5.1.1)
-
+static sz HttpRequestParseRequestLine(u8 *Buffer,
+                                      uz BufferCount,
+                                      web_http_method *Method,
+                                      web_string_view *Path,
+                                      web_http_version *Version) {
     uz I;
-    for (I = 0; I < Buffer.Count; ++I) {
-        if (Buffer.Items[I] == ' ') break;
+    for (I = 0; I < BufferCount; ++I) {
+        if (Buffer[I] == ' ') break;
     }
 
-    if (I >= Buffer.Count) {
-        *Error = WEB_SV_LIT("buffer too small to parse the request method");
-        return 0;
+    if (I >= BufferCount) {
+        return -1;
     }
 
     web_http_method RequestMethod;
-    web_string_view RequestMethodSv = {.Items = Buffer.Items, .Count = I};
+    web_string_view RequestMethodSv = {.Items = Buffer, .Count = I};
 #define X(Method) if (WebStringViewEqualCStr(RequestMethodSv, #Method)) {  \
         RequestMethod = HTTP_##Method;                                  \
         goto RequestMethodSuccess;                                      \
@@ -317,10 +319,7 @@ b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_reque
 #undef X
 
     // Failed to parse the HTTP method.
-    *Error = WebArenaFormat(Arena,
-                            "could not recognize '" WEB_SV_FMT "' as a valid HTTP request method",
-                            WEB_SV_ARG(RequestMethodSv));
-    return 0;
+    return -1;
 
  RequestMethodSuccess: ;
     // 1.2. Request URI. (https://datatracker.ietf.org/doc/html/rfc2616#section-5.1.2)
@@ -328,32 +327,30 @@ b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_reque
 
     uz PathStart = I + 1;
 
-    for (I = PathStart; I < Buffer.Count; ++I) {
-        if (Buffer.Items[I] == ' ') break;
+    for (I = PathStart; I < BufferCount; ++I) {
+        if (Buffer[I] == ' ') break;
     }
 
-    if (I >= Buffer.Count) {
-        *Error = WEB_SV_LIT("the buffer is too small to parse the request path");
-        return 0;
+    if (I >= BufferCount) {
+        return -1;
     }
 
-    web_string_view RequestPath = {.Items = Buffer.Items + PathStart, .Count = I - PathStart};
+    web_string_view RequestPath = {.Items = Buffer + PathStart, .Count = I - PathStart};
 
     // 1.3. HTTP version.
 
     uz VersionStart = I + 1;
 
-    for (I = VersionStart; I < Buffer.Count; ++I) {
-        if (Buffer.Items[I] == '\r') break;
+    for (I = VersionStart; I < BufferCount; ++I) {
+        if (Buffer[I] == '\r') break;
     }
 
-    if (I >= Buffer.Count) {
-        *Error = WEB_SV_LIT("the buffer is too small to parse the request HTTP version");
-        return 0;
+    if (I >= BufferCount) {
+        return -1;
     }
 
     web_http_version RequestVersion;
-    web_string_view VersionSv = {.Items = Buffer.Items + VersionStart, .Count = I - VersionStart};
+    web_string_view VersionSv = {.Items = Buffer + VersionStart, .Count = I - VersionStart};
 
 #define X(Version, String) if (WebStringViewEqualCStr(VersionSv, String)) { \
         RequestVersion = HTTP_##Version;                                \
@@ -364,28 +361,42 @@ b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_reque
 #undef X
 
     // NOTE(oleh): Failed to recognize the HTTP version.
-    *Error = WebArenaFormat(Arena,
-                            "could not recognize '" WEB_SV_FMT "' as a valid HTTP version",
-                            WEB_SV_ARG(VersionSv));
-    return 0;
+    return -1;
  RequestVersionSuccess:
     // 1.4. CRLF.
 
-    if (Buffer.Count - I <= 1) {
-        *Error = WEB_SV_LIT("the buffer is too small to fit the CRLF after the request line");
-        return 0;
+    if (BufferCount - I <= 1) {
+        return -1;
     }
 
-    u8 NewlineChar = Buffer.Items[I + 1];
+    u8 NewlineChar = Buffer[I + 1];
     if (NewlineChar != '\n') {
-        *Error = WebArenaFormat(Arena,
-                                "malformed CRLF sequence after the request line: expected '\\n', got '%c' instead",
-                                NewlineChar);
+        return -1;
+    }
+
+    *Method = RequestMethod;
+    *Path = RequestPath;
+    *Version = RequestVersion;
+
+    return I + 2;
+}
+
+b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_request *OutRequest, web_string_view *Error) {
+    // 1. Request line. (https://datatracker.ietf.org/doc/html/rfc2616#section-5.1)
+    // 1.1. Method. (https://datatracker.ietf.org/doc/html/rfc2616#section-5.1.1)
+    sz N = HttpRequestParseRequestLine(Buffer.Items,
+                                       0,
+                                       &OutRequest->Method,
+                                       &OutRequest->Path,
+                                       &OutRequest->Version);
+
+    if (N == -1) {
+        *Error = WEB_SV_LIT("Could not parse the request line");
         return 0;
     }
 
-    Buffer.Items += I + 2;
-    Buffer.Count -= I + 2;
+    Buffer.Items += N;
+    Buffer.Count -= N;
 
     // 2. Headers. (https://datatracker.ietf.org/doc/html/rfc2616#section-5.3)
     // FIXME(oleh): Actually parse the headers according to their specification.
@@ -393,23 +404,23 @@ b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_reque
     web_http_headers Headers;
     WEB_ARRAY_INIT(Arena, &Headers);
 
-    I = 0;
+    uz I = 0;
 
-    if (!HttpHeadersParse(Arena, Buffer, &I, &Headers, Error)) {
+    N = HttpHeadersParse(Arena, Buffer, &I, &Headers);
+    if (N == -1) {
         *Error = WebArenaFormat(Arena,
                                 "could not parse the request headers: " WEB_SV_FMT,
                                 WEB_SV_ARG(*Error));
         return 0;
     }
 
+    I += N;
+
     WEB_ASSERT(I <= Buffer.Count);
 
     // 3. Message body. (https://datatracker.ietf.org/doc/html/rfc2616#section-4.3)
     web_string_view RequestBody = {.Items = Buffer.Items + I, .Count = Buffer.Count - I};
 
-    OutRequest->Method = RequestMethod;
-    OutRequest->Path = RequestPath;
-    OutRequest->Version = RequestVersion;
     OutRequest->Headers = Headers;
     OutRequest->Body = RequestBody;
 
@@ -493,7 +504,7 @@ static sz HttpsRead(web_https_session *Sess, u8 *Buffer, uz BufferCapacity) {
 }
 
 // TODO(oleh): Get the error string.
-static sz HttpRequestReceive(worker_data *WorkerData, u8 *Buffer, uz BufferCapacity) {
+static sz HttpReceive(worker_data *WorkerData, u8 *Buffer, uz BufferCapacity) {
     sz NumRead = 0;
 
     if (WorkerData->Server->UseHttps) {
@@ -505,6 +516,118 @@ static sz HttpRequestReceive(worker_data *WorkerData, u8 *Buffer, uz BufferCapac
     }
 
     return NumRead;
+}
+
+typedef enum {
+    PARSE_STATE_REQUEST_LINE,
+    PARSE_STATE_HEADERS,
+    PARSE_STATE_BODY,
+} request_parse_state;
+
+#define INITIAL_PARSE_BUFFER_CAPACITY 4096
+
+static b32 HttpRequestParseStreaming(worker_data *WorkerData,
+                                     web_arena *Arena,
+                                     web_http_request *Request) {
+    sz WriteOffset = 0;
+    sz ParseOffset = 0;
+    sz N = 0;
+
+    sz BufferSize = 0;
+    sz BufferCapacity = INITIAL_PARSE_BUFFER_CAPACITY;
+    u8 *Buffer = WebArenaPush(Arena, BufferCapacity);
+
+    request_parse_state ParseState = PARSE_STATE_REQUEST_LINE;
+
+    s64 ContentLength = -1;
+    web_http_header Header = {0};
+    web_http_headers Headers = {0};
+    WEB_ARRAY_INIT(Arena, &Headers);
+
+ReceiveLoop:
+    if (BufferSize >= BufferCapacity) {
+        BufferCapacity <<= 1;
+        Buffer = WebArenaRealloc(Arena, Buffer, BufferSize, BufferCapacity);
+    }
+
+    N = HttpReceive(WorkerData, Buffer + WriteOffset, BufferCapacity - WriteOffset);
+    if (N == -1) {
+        WEB_LOG(ERROR, HTTP, "Failed to receive from a client socket");
+        return 0;
+    }
+
+    WriteOffset += N;
+    BufferSize += N;
+
+    switch (ParseState) {
+    case PARSE_STATE_REQUEST_LINE: goto ParseRequestLine;
+    case PARSE_STATE_HEADERS:      goto ParseHeaders;
+    case PARSE_STATE_BODY:         goto ParseBody;
+    default:                       WEB_UNREACHABLE();
+    }
+
+ParseRequestLine:
+    N = HttpRequestParseRequestLine(Buffer + ParseOffset,
+                                    BufferSize - ParseOffset,
+                                    &Request->Method,
+                                    &Request->Path,
+                                    &Request->Version);
+    if (N == -1) {
+        WEB_LOG(ERROR, HTTP, "Failed to parse the request line");
+        return 0;
+    }
+
+    ParseOffset += N;
+
+    ParseState = PARSE_STATE_HEADERS;
+
+ParseHeaders:
+    while (ParseOffset < BufferSize) {
+        N = HttpRequestParseHeader(Buffer + ParseOffset, BufferSize - ParseOffset, &Header);
+        if (N == -1) {
+            WEB_LOG(ERROR, HTTP, "Failed to parse a request's header");
+            return 0;
+        }
+
+        ParseOffset += N;
+
+        WEB_ARRAY_PUSH(Arena, &Headers, Header);
+
+        if (WebStringViewEqualCStr(Header.Name, "Content-Length")) {
+            if (!WebParseS64(Header.Value, &ContentLength)) {
+                WEB_LOG_FMT(WARN,
+                            HTTP,
+                            "Failed to parse received Content-Length header value as an integer; value=" WEB_SV_FMT,
+                            WEB_SV_ARG(Header.Value));
+                ContentLength = -1;
+            }
+        }
+
+        if (ParseOffset < BufferSize - 1 &&
+            Buffer[ParseOffset] == '\r' && Buffer[ParseOffset + 1] == '\n') {
+            ParseOffset += 2;
+            ParseState = PARSE_STATE_BODY;
+            break;
+        }
+    }
+
+    if (ParseState == PARSE_STATE_HEADERS && ParseOffset >= BufferSize) goto ReceiveLoop;
+
+ParseBody:
+    if (ContentLength >= 0) {
+        if (BufferSize - ParseOffset >= ContentLength) {
+            Request->Body.Items = Buffer + ParseOffset;
+            Request->Body.Count = ContentLength;
+            return 1;
+        }
+
+        goto ReceiveLoop;
+    } else {
+        // TODO(oleh): Maybe this should go back to the receive loop with some timeout checks.
+        Request->Body.Items = Buffer + ParseOffset;
+        Request->Body.Count = BufferSize - ParseOffset;
+        return 1;
+    }
 }
 
 static sz HttpsWrite(web_https_session *Sess, web_string_view ResponseString) {
@@ -534,23 +657,10 @@ static void ServerWorker(void *Arg) {
     WEB_ARRAY_INIT(&Ctx->Arena, &Ctx->ResponseHeaders);
     Ctx->Content = (web_string_view) {0};
 
-    const uz ParseBufferCapacity = 1024 * 1024 * 4;
-    u8 *ParseBufferItems = WebArenaPush(&Ctx->Arena, ParseBufferCapacity);
-
-    sz ReceivedBytesCount = HttpRequestReceive(Data, ParseBufferItems, ParseBufferCapacity);
-
-    if (ReceivedBytesCount == -1) {
-        printf("Could not receive data from the socket\n");
-        goto Cleanup;
-    }
-
-    web_string_view ParseBuffer = {.Items = ParseBufferItems, .Count = ReceivedBytesCount};
-
-    web_string_view ParseError;
     web_http_request HttpRequest;
-    b32 Success = WebHttpRequestParse(&Ctx->Arena, ParseBuffer, &HttpRequest, &ParseError);
+    b32 Success = HttpRequestParseStreaming(Data, &Ctx->Arena, &HttpRequest);
     if (!Success) {
-        printf("Could not parse the HTTP request: " WEB_SV_FMT "\n", WEB_SV_ARG(ParseError));
+        WEB_LOG(INFO, HTTP, "Could not streaming parse HTTP request");
         goto Cleanup;
     }
 

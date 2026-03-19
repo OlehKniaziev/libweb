@@ -2,8 +2,8 @@
 #include "../src/http.h"
 #include "../src/log.h"
 
-web_http_response_status HelloHandler(web_http_response_context *Ctx) {
-    WebHttpResponseWrite(Ctx, WEB_SV_LIT("Hello!"));
+web_http_response_status RootHandler(web_http_response_context *Ctx) {
+    WebHttpResponseWrite(Ctx, Ctx->Request.Body);
     return HTTP_STATUS_OK;
 }
 
@@ -15,9 +15,9 @@ int main() {
 
     WEB_VERIFY(WebHttpServerInit(&Server, &Config));
 
-    WebHttpServerAttachHandler(&Server, "/hello", HelloHandler);
+    WebHttpServerAttachHandler(&Server, "/", RootHandler);
 
-    u16 Port = 6969;
+    u16 Port = 7171;
 
     WebHttpServerStart(&Server, Port);
 

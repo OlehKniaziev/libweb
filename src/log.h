@@ -5,6 +5,10 @@
 
 #include <stdio.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif // __cplusplus
+
 #define WEB_ENUM_LOG_LEVELS \
     X(DEBUG) \
     X(INFO) \
@@ -58,5 +62,9 @@ void WebLog(web_log_level Level,
 void WebLogSetDestination  (FILE *);
 void WebLogSetLevel        (web_log_level);
 void WebLogSetIncludeSource(b32);
+
+#ifdef __cplusplus
+}
+#endif // __cplusplus
 
 #endif // LOG_H_

@@ -583,6 +583,13 @@ ParseRequestLine:
 
 ParseHeaders:
     while (ParseOffset < BufferSize) {
+        if (ParseOffset < BufferSize - 1 &&
+            Buffer[ParseOffset] == '\r' && Buffer[ParseOffset + 1] == '\n') {
+            ParseOffset += 2;
+            ParseState = PARSE_STATE_BODY;
+            break;
+        }
+
         N = HttpRequestParseHeader(Buffer + ParseOffset, BufferSize - ParseOffset, &Header);
         if (N == -1) {
             WEB_LOG(ERROR, HTTP, "Failed to parse a request's header");
@@ -601,13 +608,6 @@ ParseHeaders:
                             WEB_SV_ARG(Header.Value));
                 ContentLength = -1;
             }
-        }
-
-        if (ParseOffset < BufferSize - 1 &&
-            Buffer[ParseOffset] == '\r' && Buffer[ParseOffset + 1] == '\n') {
-            ParseOffset += 2;
-            ParseState = PARSE_STATE_BODY;
-            break;
         }
     }
 

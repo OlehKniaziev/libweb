@@ -197,7 +197,7 @@ static f64 ParseF64(web_string_view Buffer) {
 
     u64 Mult = 1;
     u64 Result = 0;
-    for (uz I = Buffer.Count - 1; I > 0; --I) {
+    for (sz I = Buffer.Count - 1; I >= 0; --I) {
         u8 Char = Buffer.Items[I];
         // TODO(oleh): Provide a way to signal error to the caller.
         if (Char < '0' || Char > '9') WEB_PANIC("Bad input to 'ParseF64'");

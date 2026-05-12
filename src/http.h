@@ -151,26 +151,29 @@ typedef struct {
 typedef web_http_response_status (*web_http_request_handler)(web_http_response_context *);
 
 typedef struct {
+    web_arena Arena;
+    web_thread_pool ThreadPool;
+    b32 UseHttps;
+    web_https_provider *HttpsProvider;
+} web_http_context;
+
+typedef struct {
     // TODO(oleh): Probably introduce a thread pool and accepting socket fd here.
     web_arena Arena;
     web_string_view *HandlersPaths;
     web_http_request_handler *Handlers;
     uz HandlersCount;
-    uz ThreadsCount;
-    web_thread_pool ThreadPool;
-
-    b32 UseHttps;
-    web_https_provider *HttpsProvider;
+    web_http_context *Context;
 } web_http_server;
 
 typedef struct {
     s16 NumThreads;
-
     b32 UseHttps;
     web_https_provider *HttpsProvider;
-} web_http_server_config;
+} web_http_context_config;
 
-b32 WebHttpServerInit(web_http_server *, web_http_server_config *);
+b32 WebHttpContextInit(web_http_context_config *, web_http_context *);
+b32 WebHttpServerInit(web_http_context *, web_http_server *);
 
 void WebHttpResponseWrite(web_http_response_context *, web_string_view);
 

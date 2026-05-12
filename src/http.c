@@ -505,17 +505,13 @@ static sz HttpsRead(web_https_session *Sess, u8 *Buffer, uz BufferCapacity) {
 
 // TODO(oleh): Get the error string.
 static sz HttpReceive(worker_data *WorkerData, u8 *Buffer, uz BufferCapacity) {
-    sz NumRead = 0;
-
-    if (WorkerData->Server->UseHttps) {
-        NumRead = HttpsRead(&WorkerData->HttpsSession,
-                            Buffer,
-                            BufferCapacity);
+    if (WorkerData->Server->Context->UseHttps) {
+        return HttpsRead(&WorkerData->HttpsSession,
+                         Buffer,
+                         BufferCapacity);
     } else {
-        NumRead = read(WorkerData->ClientSock, Buffer, BufferCapacity);
+        return read(WorkerData->ClientSock, Buffer, BufferCapacity);
     }
-
-    return NumRead;
 }
 
 typedef enum {
@@ -635,8 +631,8 @@ static sz HttpsWrite(web_https_session *Sess, web_string_view ResponseString) {
 }
 
 // TODO(oleh): Get the error string.
-static sz HttpResponseSend(worker_data *WorkerData, web_string_view ResponseString) {
-    if (WorkerData->Server->UseHttps) {
+static sz HttpSend(worker_data *WorkerData, web_string_view ResponseString) {
+    if (WorkerData->Server->Context->UseHttps) {
         return HttpsWrite(&WorkerData->HttpsSession, ResponseString);
     } else {
         return write(WorkerData->ClientSock, ResponseString.Items, ResponseString.Count);
@@ -691,7 +687,7 @@ static void ServerWorker(void *Arg) {
                                                         WEB_SV_ARG(ResponseHeadersString),
                                                         WEB_SV_ARG(Ctx->Content));
 
-        sz NumSent = HttpResponseSend(Data, ResponseString);
+        sz NumSent = HttpSend(Data, ResponseString);
         WEB_VERIFY(NumSent > 0);
 
         goto Cleanup;
@@ -712,7 +708,7 @@ static void ServerWorker(void *Arg) {
     WEB_ASSERT(SendStatus != -1);
 
 Cleanup:
-    if (Data->Server->UseHttps) {
+    if (Data->Server->Context->UseHttps) {
         HttpsCloseConnection(&Data->HttpsSession);
     }
 
@@ -834,11 +830,11 @@ void WebHttpServerStart(web_http_server *Server, u16 Port) {
 
         web_https_session HttpsSession = {0};
 
-        if (Server->UseHttps) {
-            int Status = HttpsAcceptConnection(Server->HttpsProvider, ClientSock, &HttpsSession);
+        if (Server->Context->UseHttps) {
+            int Status = HttpsAcceptConnection(Server->Context->HttpsProvider, ClientSock, &HttpsSession);
 
             if (Status < 0) {
-                const char *ErrorString = HttpsGetErrorString(Server->HttpsProvider, Status);
+                const char *ErrorString = HttpsGetErrorString(Server->Context->HttpsProvider, Status);
                 (void) ErrorString;
                 WEB_LOG_FATAL_FMT("Sum SSL bullshit: %s", ErrorString);
             } else if (Status == 0) {
@@ -856,7 +852,7 @@ void WebHttpServerStart(web_http_server *Server, u16 Port) {
         WorkerData->HttpsSession = HttpsSession;
 
         web_thread_pool_task Task = {.Proc = ServerWorker, .Arg = WorkerData};
-        WebThreadPoolScheduleTask(&Server->ThreadPool, Task);
+        WebThreadPoolScheduleTask(&Server->Context->ThreadPool, Task);
     }
 }
 
@@ -915,14 +911,17 @@ static void HttpsInit(web_https_provider *Provider) {
     WEB_UNREACHABLE();
 }
 
-b32 WebHttpServerInit(web_http_server *Server, web_http_server_config *Config) {
-    Server->UseHttps = Config->UseHttps;
-    Server->HttpsProvider = Config->HttpsProvider;
+b32 WebHttpContextInit(web_http_context_config *Config, web_http_context *Context) {
+    uz NumThreads = Config->NumThreads || 1;
+    web_thread_pool_config ThreadPoolConfig = {.NumThreads = NumThreads};
+    return WebThreadPoolInit(&Context->ThreadPool, &Context->Arena, &ThreadPoolConfig);
+}
 
-    if (Config->UseHttps) {
-        WEB_VERIFY(Config->HttpsProvider != NULL);
+b32 WebHttpServerInit(web_http_context *Context, web_http_server *Server) {
+    if (Context->UseHttps) {
+        WEB_VERIFY(Context->HttpsProvider != NULL);
 
-        HttpsInit(Config->HttpsProvider);
+        HttpsInit(Context->HttpsProvider);
     }
 
     WebArenaInit(&Server->Arena, HTTP_SERVER_ARENA_CAPACITY);
@@ -932,10 +931,7 @@ b32 WebHttpServerInit(web_http_server *Server, web_http_server_config *Config) {
 
     Server->HandlersCount = 0;
 
-    Server->ThreadsCount = Config->NumThreads || 1;
-
-    web_thread_pool_config ThreadPoolConfig = {.NumThreads = Server->ThreadsCount};
-    return WebThreadPoolInit(&Server->ThreadPool, &Server->Arena, &ThreadPoolConfig);
+    return 1;
 }
 
 void WebHttpContextAddHeader(web_http_response_context *Ctx, web_string_view Name, web_string_view Value) {

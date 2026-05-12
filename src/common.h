@@ -10,7 +10,7 @@
 
 #define _WEB_DO_ASSERT(Msg, X) do {                                                  \
         if (!(X)) {                                                     \
-    fprintf(stderr, "%s:%d: " Msg ": %s\n", __FILE__, __LINE__, #X); \
+            fprintf(stderr, "%s:%d: " Msg ": %s\n", __FILE__, __LINE__, #X); \
             abort();                                                    \
         }                                                               \
 } while (0)

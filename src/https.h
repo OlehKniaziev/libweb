@@ -37,10 +37,10 @@ typedef struct {
 
 typedef struct {
     enum {
+        WEB_HTTPS_PROVIDER_CUSTOM,
 #ifdef WEB_USE_HTTPS_OPENSSL
         WEB_HTTPS_PROVIDER_OPENSSL,
 #endif // WEB_USE_HTTPS_OPENSSL
-        WEB_HTTPS_PROVIDER_CUSTOM,
     } Type;
 
     void *Data;
@@ -55,6 +55,7 @@ typedef struct {
 typedef struct {
     void (*Init)            (void *Data);
     sz   (*AcceptConnection)(void *Data, int Sock, web_https_session *Sess);
+    sz   (*Connect)         (void *Data, int Sock, web_https_session *Sess);
 
     const char *(*GetErrorString)(void *Data, int Error);
 } web_https_custom_provider_vtable;

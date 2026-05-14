@@ -27,6 +27,46 @@ WEB_ENUM_HTTP_RESPONSE_STATUSES
     WEB_PANIC_FMT("Unknown response status %d", Status);
 }
 
+typedef struct {
+    web_http_context *Context;
+    web_http_server *Server;
+
+    int Sock;
+    web_https_session HttpsSession;
+
+    web_http_request Request;
+    web_http_response *Response;
+    b32 StatusBit;
+} worker_data;
+
+static sz HttpsWrite(web_https_session *Sess, web_string_view ResponseString) {
+    return Sess->VTable.Write(Sess->Data, ResponseString.Items, ResponseString.Count);
+}
+
+// TODO(oleh): Get the error string.
+static sz HttpSend(worker_data *WorkerData, web_string_view Data) {
+    if (WorkerData->Context->UseHttps) {
+        return HttpsWrite(&WorkerData->HttpsSession, Data);
+    } else {
+        return write(WorkerData->Sock, Data.Items, Data.Count);
+    }
+}
+
+static sz HttpsRead(web_https_session *Sess, u8 *Buffer, uz BufferCapacity) {
+    return Sess->VTable.Read(Sess->Data, Buffer, BufferCapacity);
+}
+
+// TODO(oleh): Get the error string.
+static sz HttpReceive(worker_data *WorkerData, u8 *Buffer, uz BufferCapacity) {
+    if (WorkerData->Server->Context->UseHttps) {
+        return HttpsRead(&WorkerData->HttpsSession,
+                         Buffer,
+                         BufferCapacity);
+    } else {
+        return read(WorkerData->Sock, Buffer, BufferCapacity);
+    }
+}
+
 static void HttpHeadersFormat(web_arena *Arena, web_dynamic_string *String, web_http_headers Headers) {
     for (uz HeaderIndex = 0; HeaderIndex < Headers.Count; ++HeaderIndex) {
         web_http_header Header = Headers.Items[HeaderIndex];
@@ -49,7 +89,130 @@ static void HttpHeadersFormat(web_arena *Arena, web_dynamic_string *String, web_
 
 #define WEB_HTTP_RESPONSE_MAX_SIZE (128l * 1024l * 512l)
 
-b32 WebHttpRequestSend(web_arena *ResponseArena,
+static web_string_view HttpRequestToString(web_arena *Arena, web_http_request Request) {
+    const char *VersionString = HttpVersionStrings[Request.Version];
+    web_string_view VersionSv = WEB_SV_LIT(VersionString);
+
+    const char *MethodString = HttpMethodNames[Request.Method];
+    web_string_view MethodSv = WEB_SV_LIT(MethodString);
+
+    web_dynamic_string RequestString;
+    WEB_ARRAY_INIT(Arena, &RequestString);
+
+    // Request line.
+    WEB_ARRAY_EXTEND(Arena, &RequestString, &MethodSv);
+    WEB_ARRAY_PUSH(Arena, &RequestString, ' ');
+    WEB_ARRAY_EXTEND(Arena, &RequestString, &Request.Path);
+    WEB_ARRAY_PUSH(Arena, &RequestString, ' ');
+    WEB_ARRAY_EXTEND(Arena, &RequestString, &VersionSv);
+    WEB_ARRAY_PUSH(Arena, &RequestString, '\r');
+    WEB_ARRAY_PUSH(Arena, &RequestString, '\n');
+
+    // Headers.
+    HttpHeadersFormat(Arena, &RequestString, Request.Headers);
+    WEB_ARRAY_PUSH(Arena, &RequestString, '\r');
+    WEB_ARRAY_PUSH(Arena, &RequestString, '\n');
+
+    // Body.
+    WEB_ARRAY_EXTEND(Arena, &RequestString, &Request.Body);
+
+
+    return (web_string_view){.Items = RequestString.Items, .Count = RequestString.Count};
+}
+
+#ifdef WEB_USE_HTTPS_OPENSSL
+static SSL *PrepareOpenSSLSession(web_https_provider *Provider, int Sock, web_https_session *Sess) {
+    WEB_ASSERT(Provider->Type == WEB_HTTPS_PROVIDER_OPENSSL);
+
+    static web_https_session_vtable OpenSSLSessionVTable = {
+        .Read = OpenSSLSessionRead,
+        .Write = OpenSSLSessionWrite,
+        .Close = OpenSSLSessionClose,
+    };
+
+    SSL_CTX *SslCtx = (SSL_CTX *) Provider->Data;
+    SSL *Ssl = SSL_new(SslCtx);
+    SSL_set_fd(Ssl, Sock);
+    Sess->Data = Ssl;
+    Sess->VTable = OpenSSLSessionVTable;
+
+    return Ssl;
+}
+#endif // WEB_USE_HTTPS_OPENSSL
+
+static int HttpsConnect(web_https_provider *Provider, int Sock, web_https_session *Sess) {
+    switch (Provider->Type) {
+    WEB_CASE_PROVIDER_OPENSSL({
+        SSL *Ssl = PrepareOpenSSLSession(Provider, Sock, Sess);
+        return SSL_connect(Ssl);
+    });
+    case WEB_HTTPS_PROVIDER_CUSTOM: {
+        web_https_custom_provider *Custom = (web_https_custom_provider *) Provider->Data;
+        return Custom->VTable.Connect(Custom->Data, Sock, Sess);
+    }
+    }
+
+    WEB_UNREACHABLE();
+}
+
+static int HttpsAcceptConnection(web_https_provider *Provider, int Sock, web_https_session *Sess) {
+    switch (Provider->Type) {
+    WEB_CASE_PROVIDER_OPENSSL({
+        SSL *Ssl = PrepareOpenSSLSession(Provider, Sock, Sess);
+        return SSL_accept(Ssl);
+    });
+    case WEB_HTTPS_PROVIDER_CUSTOM: {
+        web_https_custom_provider *Custom = (web_https_custom_provider *) Provider->Data;
+        return Custom->VTable.AcceptConnection(Custom->Data, Sock, Sess);
+    }
+    }
+
+    WEB_UNREACHABLE();
+}
+
+// NOTE(oleh): Not sure if it's fine to use temp here for most of the stuff as the temp arena is kinda
+// expected to be small.
+static void HttpRequestSendProc(void *DataPtr) {
+    worker_data *WorkerData = (worker_data *) DataPtr;
+
+    b32 Result = 1;
+
+    web_arena *Temp = WebGetTempArena();
+
+    web_string_view RequestString = HttpRequestToString(Temp, WorkerData->Request);
+
+    int Status = HttpSend(WorkerData, RequestString);
+    if (Status == -1) {
+        Result = 0;
+        goto End;
+    }
+
+    uz ResponseArenaAvailableMemory = WebArenaAvail(&WorkerData->Context->Arena);
+    // FIXME(oleh): Replace the magic number.
+    uz ResponseBufferCount = WEB_MIN(ResponseArenaAvailableMemory / 16, WEB_HTTP_RESPONSE_MAX_SIZE);
+    u8 *ResponseBuffer = WebArenaPush(Temp, ResponseBufferCount);
+
+    Status = read(WorkerData->Sock, ResponseBuffer, ResponseBufferCount);
+    if (Status == -1) {
+        Result = 0;
+        goto End;
+    }
+
+    web_string_view ResponseSv = {
+        .Items = ResponseBuffer,
+        .Count = Status,
+    };
+
+    if (!WebHttpResponseParse(Temp, ResponseSv, WorkerData->Response)) {
+        Result = 0;
+        goto End;
+    }
+
+End:
+    WorkerData->StatusBit = Result;
+}
+
+b32 WebHttpRequestSend(web_http_context *Context,
                        web_string_view Hostname,
                        u16 Port,
                        web_http_request Request,
@@ -76,70 +239,43 @@ b32 WebHttpRequestSend(web_arena *ResponseArena,
         goto End;
     }
 
-    int ServerSock = socket(ServerAddr->ai_family, ServerAddr->ai_socktype, 0);
-    if (ServerSock == -1) {
+    int Sock = socket(ServerAddr->ai_family, ServerAddr->ai_socktype, 0);
+    if (Sock == -1) {
         // FIXME(oleh): Report an error.
         Result = 0;
         goto End;
     }
 
-    Status = connect(ServerSock, ServerAddr->ai_addr, ServerAddr->ai_addrlen);
+    Status = connect(Sock, ServerAddr->ai_addr, ServerAddr->ai_addrlen);
     if (Status != 0) {
         Result = 0;
         goto End;
     }
 
-    const char *VersionString = HttpVersionStrings[Request.Version];
-    web_string_view VersionSv = WEB_SV_LIT(VersionString);
+    web_https_session HttpsSession = {0};
 
-    const char *MethodString = HttpMethodNames[Request.Method];
-    web_string_view MethodSv = WEB_SV_LIT(MethodString);
+    if (Context->UseHttps) {
+        Status = HttpsConnect(Context->HttpsProvider, Sock, &HttpsSession);
 
-    web_dynamic_string RequestString;
-    WEB_ARRAY_INIT(Temp, &RequestString);
-
-    // Request line.
-    WEB_ARRAY_EXTEND(Temp, &RequestString, &MethodSv);
-    WEB_ARRAY_PUSH(Temp, &RequestString, ' ');
-    WEB_ARRAY_EXTEND(Temp, &RequestString, &Request.Path);
-    WEB_ARRAY_PUSH(Temp, &RequestString, ' ');
-    WEB_ARRAY_EXTEND(Temp, &RequestString, &VersionSv);
-    WEB_ARRAY_PUSH(Temp, &RequestString, '\r');
-    WEB_ARRAY_PUSH(Temp, &RequestString, '\n');
-
-    // Headers.
-    HttpHeadersFormat(Temp, &RequestString, Request.Headers);
-    WEB_ARRAY_PUSH(Temp, &RequestString, '\r');
-    WEB_ARRAY_PUSH(Temp, &RequestString, '\n');
-
-    // Body.
-    WEB_ARRAY_EXTEND(Temp, &RequestString, &Request.Body);
-
-    Status = write(ServerSock, RequestString.Items, RequestString.Count);
-    if (Status == -1) {
-        Result = 0;
-        goto End;
+        if (Status <= 0) WEB_TODO();
     }
 
-    uz ResponseArenaAvailableMemory = ResponseArena->Capacity - ResponseArena->Offset;
-    uz ResponseBufferCount = WEB_MIN(ResponseArenaAvailableMemory / 16, WEB_HTTP_RESPONSE_MAX_SIZE);
-    u8 *ResponseBuffer = WebArenaPush(ResponseArena, ResponseBufferCount);
+    worker_data *WorkerData = WebSyncPoolAlloc(&Context->WorkerPool);
 
-    Status = read(ServerSock, ResponseBuffer, ResponseBufferCount);
-    if (Status == -1) {
-        Result = 0;
-        goto End;
-    }
+    WorkerData->Context = Context;
+    WorkerData->Sock = Sock;
+    WorkerData->HttpsSession = HttpsSession;
+    WorkerData->Request = Request;
+    WorkerData->Response = Response;
 
-    web_string_view ResponseSv = {
-        .Items = ResponseBuffer,
-        .Count = Status,
-    };
+    web_thread_pool_task *Task = WEB_ARENA_NEW(Temp, web_thread_pool_task);
+    WebThreadPoolTaskInit(Task, HttpRequestSendProc, WorkerData);
 
-    if (!WebHttpResponseParse(ResponseArena, ResponseSv, Response)) {
-        Result = 0;
-        goto End;
-    }
+    WebThreadPoolScheduleTask(&Context->ThreadPool, Task);
+
+    WebThreadPoolTaskWaitUntilCompletion(Task);
+
+    Result = WorkerData->StatusBit;
 
 End:
     if (ServerAddr != NULL) {
@@ -436,83 +572,10 @@ static const char *GetHttpResponseStatusReasonPhrase(web_http_response_status St
     }
 }
 
-typedef void *(*sync_pool_new_proc)(uz *Size);
-
-typedef struct sync_pool_node {
-    struct sync_pool_node *Next;
-    u8 Item[];
-} sync_pool_node;
-
-typedef struct {
-    sync_pool_new_proc NewProc;
-    sync_pool_node *Head;
-    web_mutex Mu;
-} sync_pool;
-
-static void SyncPoolInit(sync_pool *Pool, sync_pool_new_proc NewProc) {
-    WEB_STRUCT_ZERO(Pool);
-    Pool->NewProc = NewProc;
-    WebMutexInit(&Pool->Mu);
-}
-
-static void *SyncPoolAlloc(sync_pool *Pool) {
-    WebMutexLock(&Pool->Mu);
-
-    sync_pool_node *Node = NULL;
-
-    if (Pool->Head == NULL) {
-        uz ItemSize = 0;
-        void *ItemData = Pool->NewProc(&ItemSize);
-        Node = malloc(sizeof(sync_pool_node) + ItemSize);
-        WEB_STRUCT_ZERO(Node);
-        memcpy(Node->Item, ItemData, ItemSize);
-        goto Cleanup;
-    }
-
-    Node = Pool->Head;
-    Pool->Head = Pool->Head->Next;
-Cleanup:
-    WebMutexUnlock(&Pool->Mu);
-    return Node->Item;
-}
-
-static void SyncPoolFree(sync_pool *Pool, void *Item) {
-    WebMutexLock(&Pool->Mu);
-
-    sync_pool_node *Node = (sync_pool_node *)((u8 *)Item - sizeof(Node->Next));
-    Node->Next = Pool->Head;
-    Pool->Head = Node;
-
-    WebMutexUnlock(&Pool->Mu);
-}
-
 #define TCP_BACKLOG_SIZE 256
 
 // NOTE(oleh): This is bad.
 #define DEFAULT_REQUEST_ARENA_CAPACITY (4ll * 1024ll * 1024ll * 1024ll)
-
-typedef struct {
-    sync_pool *WorkerDataPool;
-    sync_pool *ContextPool;
-    web_http_server *Server;
-    int ClientSock;
-    web_https_session HttpsSession;
-} worker_data;
-
-static sz HttpsRead(web_https_session *Sess, u8 *Buffer, uz BufferCapacity) {
-    return Sess->VTable.Read(Sess->Data, Buffer, BufferCapacity);
-}
-
-// TODO(oleh): Get the error string.
-static sz HttpReceive(worker_data *WorkerData, u8 *Buffer, uz BufferCapacity) {
-    if (WorkerData->Server->Context->UseHttps) {
-        return HttpsRead(&WorkerData->HttpsSession,
-                         Buffer,
-                         BufferCapacity);
-    } else {
-        return read(WorkerData->ClientSock, Buffer, BufferCapacity);
-    }
-}
 
 typedef enum {
     PARSE_STATE_REQUEST_LINE,
@@ -626,19 +689,6 @@ ParseBody:
     }
 }
 
-static sz HttpsWrite(web_https_session *Sess, web_string_view ResponseString) {
-    return Sess->VTable.Write(Sess->Data, ResponseString.Items, ResponseString.Count);
-}
-
-// TODO(oleh): Get the error string.
-static sz HttpSend(worker_data *WorkerData, web_string_view ResponseString) {
-    if (WorkerData->Server->Context->UseHttps) {
-        return HttpsWrite(&WorkerData->HttpsSession, ResponseString);
-    } else {
-        return write(WorkerData->ClientSock, ResponseString.Items, ResponseString.Count);
-    }
-}
-
 static sz HttpsCloseConnection(web_https_session *Sess) {
     return Sess->VTable.Close(Sess->Data);
 }
@@ -646,7 +696,7 @@ static sz HttpsCloseConnection(web_https_session *Sess) {
 static void ServerWorker(void *Arg) {
     worker_data *Data = (worker_data *)Arg;
 
-    web_http_response_context *Ctx = SyncPoolAlloc(Data->ContextPool);
+    web_http_response_context *Ctx = WebSyncPoolAlloc(&Data->Context->ResponseContextPool);
 
     WebArenaReset(&Ctx->Arena);
     Ctx->ResponseHeaders.Count = 0;
@@ -704,7 +754,7 @@ static void ServerWorker(void *Arg) {
                                                     ResponseStatus,
                                                     ReasonPhrase);
 
-    int SendStatus = send(Data->ClientSock, ResponseString.Items, ResponseString.Count, 0);
+    int SendStatus = send(Data->Sock, ResponseString.Items, ResponseString.Count, 0);
     WEB_ASSERT(SendStatus != -1);
 
 Cleanup:
@@ -712,61 +762,15 @@ Cleanup:
         HttpsCloseConnection(&Data->HttpsSession);
     }
 
-    close(Data->ClientSock);
-
-    SyncPoolFree(Data->ContextPool, Ctx);
-    SyncPoolFree(Data->WorkerDataPool, Data);
-}
-
-static void *NewWorkerDataPoolProc(uz *Size) {
-    *Size = sizeof(worker_data);
-    return malloc(*Size);
-}
-
-static void *NewContextPoolProc(uz *Size) {
-    *Size = sizeof(web_http_response_context);
-    web_http_response_context *ResponseContext = malloc(*Size);
-    WEB_STRUCT_ZERO(ResponseContext);
-    WebArenaInit(&ResponseContext->Arena, DEFAULT_REQUEST_ARENA_CAPACITY);
-    return ResponseContext;
-}
-
-static int HttpsAcceptConnection(web_https_provider *Provider, int ClientSock, web_https_session *Sess) {
-    switch (Provider->Type) {
-#ifdef WEB_USE_HTTPS_OPENSSL
-    case WEB_HTTPS_PROVIDER_OPENSSL: {
-        static web_https_session_vtable OpenSSLSessionVTable = {
-            .Read = OpenSSLSessionRead,
-            .Write = OpenSSLSessionWrite,
-            .Close = OpenSSLSessionClose,
-        };
-
-        SSL_CTX *SslCtx = (SSL_CTX *) Provider->Data;
-        SSL *Ssl = SSL_new(SslCtx);
-        SSL_set_fd(Ssl, ClientSock);
-        Sess->Data = Ssl;
-        Sess->VTable = OpenSSLSessionVTable;
-
-        return SSL_accept(Ssl);
-    }
-#endif // WEB_USE_HTTPS_OPENSSL
-    case WEB_HTTPS_PROVIDER_CUSTOM: {
-        web_https_custom_provider *Custom = (web_https_custom_provider *) Provider->Data;
-        return Custom->VTable.AcceptConnection(Custom->Data, ClientSock, Sess);
-    }
-    }
-
-    WEB_UNREACHABLE();
+    close(Data->Sock);
 }
 
 static const char *HttpsGetErrorString(web_https_provider *Provider, int Error) {
     switch (Provider->Type) {
-#ifdef WEB_USE_HTTPS_OPENSSL
-    case WEB_HTTPS_PROVIDER_OPENSSL: {
+    WEB_CASE_PROVIDER_OPENSSL({
         uz SslError = ERR_get_error();
         return ERR_error_string(SslError, NULL);
-    }
-#endif // WEB_USE_HTTPS_OPENSSL
+    });
     case WEB_HTTPS_PROVIDER_CUSTOM: {
         web_https_custom_provider *Custom = (web_https_custom_provider *) Provider->Data;
         return Custom->VTable.GetErrorString(Custom->Data, Error);
@@ -813,16 +817,10 @@ void WebHttpServerStart(web_http_server *Server, u16 Port) {
     struct sockaddr_storage ClientAddr;
     socklen_t ClientAddrSize = sizeof(ClientAddr);
 
-    sync_pool WorkerDataPool;
-    SyncPoolInit(&WorkerDataPool, NewWorkerDataPoolProc);
-
-    sync_pool ContextPool;
-    SyncPoolInit(&ContextPool, NewContextPoolProc);
-
     while (1) {
-        int ClientSock = accept(ServerSock, (struct sockaddr*)&ClientAddr, &ClientAddrSize);
+        int Sock = accept(ServerSock, (struct sockaddr*)&ClientAddr, &ClientAddrSize);
 
-        if (ClientSock == -1) {
+        if (Sock == -1) {
             int AcceptError = errno;
             close(ServerSock);
             WEB_PANIC_FMT("Could not accept a new connection: %s", strerror(AcceptError));
@@ -831,7 +829,7 @@ void WebHttpServerStart(web_http_server *Server, u16 Port) {
         web_https_session HttpsSession = {0};
 
         if (Server->Context->UseHttps) {
-            int Status = HttpsAcceptConnection(Server->Context->HttpsProvider, ClientSock, &HttpsSession);
+            int Status = HttpsAcceptConnection(Server->Context->HttpsProvider, Sock, &HttpsSession);
 
             if (Status < 0) {
                 const char *ErrorString = HttpsGetErrorString(Server->Context->HttpsProvider, Status);
@@ -839,19 +837,19 @@ void WebHttpServerStart(web_http_server *Server, u16 Port) {
                 WEB_LOG_FATAL_FMT("Sum SSL bullshit: %s", ErrorString);
             } else if (Status == 0) {
                 WEB_LOG(INFO, TLS, "Client reset TLS connection");
-                close(ClientSock);
+                close(Sock);
                 continue;
             }
         }
 
-        worker_data *WorkerData = SyncPoolAlloc(&WorkerDataPool);
-        WorkerData->WorkerDataPool = &WorkerDataPool;
+        worker_data *WorkerData = WebSyncPoolAlloc(&Server->Context->WorkerPool);
+        WorkerData->Context = Server->Context;
         WorkerData->Server = Server;
-        WorkerData->ContextPool = &ContextPool;
-        WorkerData->ClientSock = ClientSock;
+        WorkerData->Sock = Sock;
         WorkerData->HttpsSession = HttpsSession;
 
-        web_thread_pool_task Task = {.Proc = ServerWorker, .Arg = WorkerData};
+        web_thread_pool_task *Task = WebSyncPoolAlloc(&Server->Context->TaskPool);
+        WebThreadPoolTaskInit(Task, ServerWorker, WorkerData);
         WebThreadPoolScheduleTask(&Server->Context->ThreadPool, Task);
     }
 }
@@ -911,7 +909,35 @@ static void HttpsInit(web_https_provider *Provider) {
     WEB_UNREACHABLE();
 }
 
+static void *NewWorkerDataPoolProc(uz *Size) {
+    *Size = sizeof(worker_data);
+    // FIXME(oleh): Replace this asap.
+    return malloc(*Size);
+}
+
+static void *NewContextPoolProc(uz *Size) {
+    *Size = sizeof(web_http_response_context);
+    // FIXME(oleh): Replace this asap #2.
+    web_http_response_context *ResponseContext = malloc(*Size);
+    WEB_STRUCT_ZERO(ResponseContext);
+    WebArenaInit(&ResponseContext->Arena, DEFAULT_REQUEST_ARENA_CAPACITY);
+    return ResponseContext;
+}
+
+static void *NewTaskProc(uz *Size) {
+    web_thread_pool_task *Task;
+    *Size = sizeof(*Task);
+    // FIXME(oleh): Replace this asap #3.
+    Task = malloc(*Size);
+    WEB_STRUCT_ZERO(Task);
+    return Task;
+}
+
 b32 WebHttpContextInit(web_http_context_config *Config, web_http_context *Context) {
+    WebSyncPoolInit(&Context->WorkerPool, NewWorkerDataPoolProc);
+    WebSyncPoolInit(&Context->TaskPool, NewTaskProc);
+    WebSyncPoolInit(&Context->ResponseContextPool, NewContextPoolProc);
+
     uz NumThreads = Config->NumThreads || 1;
     web_thread_pool_config ThreadPoolConfig = {.NumThreads = NumThreads};
     return WebThreadPoolInit(&Context->ThreadPool, &Context->Arena, &ThreadPoolConfig);

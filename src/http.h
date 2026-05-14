@@ -5,10 +5,23 @@
 #include "json.h"
 #include "threadpool.h"
 #include "https.h"
+#include "pool.h"
 
 #ifdef __cplusplus
     extern "C" {
 #endif
+
+typedef struct {
+    web_arena Arena;
+    web_thread_pool ThreadPool;
+    b32 UseHttps;
+    web_https_provider *HttpsProvider;
+
+    web_sync_pool WorkerPool;
+    web_sync_pool TaskPool;
+    // FIXME(oleh): Probably not the best approach, can use response_context[thread_count].
+    web_sync_pool ResponseContextPool;
+} web_http_context;
 
 // NOTE(oleh): https://datatracker.ietf.org/doc/html/rfc2616#section-5.1.1
 #define WEB_ENUM_HTTP_METHODS               \
@@ -133,7 +146,7 @@ typedef struct {
 } web_http_response;
 
 b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_request *Out, web_string_view *Error);
-b32 WebHttpRequestSend(web_arena *Arena,
+b32 WebHttpRequestSend(web_http_context *Context,
                        web_string_view Hostname,
                        u16 Port,
                        web_http_request Request,
@@ -149,13 +162,6 @@ typedef struct {
 } web_http_response_context;
 
 typedef web_http_response_status (*web_http_request_handler)(web_http_response_context *);
-
-typedef struct {
-    web_arena Arena;
-    web_thread_pool ThreadPool;
-    b32 UseHttps;
-    web_https_provider *HttpsProvider;
-} web_http_context;
 
 typedef struct {
     // TODO(oleh): Probably introduce a thread pool and accepting socket fd here.

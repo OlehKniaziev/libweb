@@ -13,7 +13,7 @@ typedef struct {
     pthread_mutex_t Inner;
 } web_mutex;
 
-void WebMutexInit(web_mutex *Mu);
+void WebMutexInit(web_mutex *);
 void WebMutexLock(web_mutex *);
 void WebMutexUnlock(web_mutex *);
 b32 WebMutexTryLock(web_mutex *);
@@ -27,7 +27,15 @@ typedef void (*web_thread_pool_task_proc)(void *arg);
 typedef struct {
     web_thread_pool_task_proc Proc;
     void *Arg;
+    web_mutex Mu;
+    pthread_cond_t Cond;
+    b32 Completed;
 } web_thread_pool_task;
+
+void WebThreadPoolTaskInit(web_thread_pool_task * Task,
+                           web_thread_pool_task_proc Proc,
+                           void *ProcArg);
+void WebThreadPoolTaskWaitUntilCompletion(web_thread_pool_task *);
 
 typedef struct {
     web_arena *Arena;
@@ -35,7 +43,7 @@ typedef struct {
     web_thread *Threads;
     uz ThreadsCount;
 
-    web_thread_pool_task *QueueItems;
+    web_thread_pool_task **QueueItems;
     uz QueueCapacity;
     uz QueueHead;
     uz QueueTail;
@@ -50,6 +58,6 @@ typedef struct {
 
 b32 WebThreadPoolInit(web_thread_pool *, web_arena *, web_thread_pool_config *);
 
-void WebThreadPoolScheduleTask(web_thread_pool *, web_thread_pool_task);
+void WebThreadPoolScheduleTask(web_thread_pool *, web_thread_pool_task *);
 
 #endif // THREADPOOL_H_

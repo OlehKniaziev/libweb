@@ -17,6 +17,7 @@ while getopts "de" flag; do
         ;;
         \?)
             echo "Unrecognized flag '$flag'"
+            exit 1
         ;;
     esac
 done

@@ -98,7 +98,7 @@ b32 WebBase64Decode(web_string_view InputBuffer, u8 *OutputBuffer, uz *OutputBuf
         goto End;
     }
 
-    for (uz I = 0; I < InputBuffer.Count; I += 4) {
+    for (sz I = 0; I < InputBuffer.Count; I += 4) {
         u32 Bytes = 0;
 
         for (uz J = 0; J < 4; ++J) {
@@ -130,7 +130,7 @@ End:
 
 void WebBase64Encode(web_string_view InputBuffer, u8 *OutputBuffer, uz *OutputBufferCount) {
     uz OutputCount = 0;
-    uz I;
+    sz I;
 
     for (I = 0; I < InputBuffer.Count; I += 3) {
         u32 Word = (InputBuffer.Items[I] << 16) | (InputBuffer.Items[I + 1] << 8) | (InputBuffer.Items[I + 2]);

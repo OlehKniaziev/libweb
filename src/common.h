@@ -82,20 +82,20 @@ typedef ssize_t sz;
 
 typedef struct {
     u8 *Items;
-    uz Count;
+    sz Count;
 } web_string_view;
 
 typedef struct {
     u8 *Items;
-    uz Count;
-    uz Capacity;
+    sz Count;
+    sz Capacity;
 } web_dynamic_string;
 
 static inline b32 WebStringViewEqualCStr(web_string_view Sv, const char *CStr) {
-    uz CStrLength = strlen(CStr);
+    sz CStrLength = strlen(CStr);
     if (Sv.Count != CStrLength) return 0;
 
-    for (uz I = 0; I < Sv.Count; ++I) {
+    for (sz I = 0; I < Sv.Count; ++I) {
         if (Sv.Items[I] != CStr[I]) return 0;
     }
 
@@ -105,7 +105,7 @@ static inline b32 WebStringViewEqualCStr(web_string_view Sv, const char *CStr) {
 static inline b32 WebStringViewEqual(web_string_view Lhs, web_string_view Rhs) {
     if (Lhs.Count != Rhs.Count) return 0;
 
-    for (uz I = 0; I < Lhs.Count; ++I) {
+    for (sz I = 0; I < Lhs.Count; ++I) {
         if (Lhs.Items[I] != Rhs.Items[I]) return 0;
     }
 
@@ -115,8 +115,8 @@ static inline b32 WebStringViewEqual(web_string_view Lhs, web_string_view Rhs) {
 typedef struct {
     u8 *Items;
     void *LastAlloc;
-    uz Capacity;
-    uz Offset;
+    sz Capacity;
+    sz Offset;
 } web_arena;
 
 static inline uz WebAlignForward(uz Size, uz Alignment) {
@@ -183,6 +183,9 @@ static inline void WebArenaReset(web_arena *Arena) {
     Arena->Offset = 0;
 }
 
+// FIXME(oleh): This pattern is wrong.
+// F1              -> call -> reset -> alloc
+// F1[TempData]|F2 -> call -> reset -> alloc overwrites F1[TempData]
 web_arena *WebGetTempArena(void);
 
 #define WEB_ARENA_NEW(Arena, Type) ((Type *)WEB_MEMORY_ZERO(WebArenaPush((Arena), sizeof(Type)), sizeof(Type)))
@@ -210,7 +213,7 @@ b32 WebReadFullFile(web_arena *Arena, const char *Path, web_string_view *OutCont
 
 #define WEB_ARRAY_PUSH(Arena, Array, Element) do {                          \
         if ((Array)->Count >= (Array)->Capacity) {                      \
-            uz NewCapacity = ((Array)->Capacity + 1) * 2;               \
+            sz NewCapacity = ((Array)->Capacity + 1) * 2;               \
             (Array)->Items = WebArenaRealloc((Arena), (Array)->Items, sizeof(*(Array)->Items) * (Array)->Capacity, sizeof(*(Array)->Items) * NewCapacity); \
             (Array)->Capacity = NewCapacity;                            \
         }                                                               \
@@ -222,7 +225,7 @@ b32 WebReadFullFile(web_arena *Arena, const char *Path, web_string_view *OutCont
 // TODO(oleh): Since we know the number of elements in the Rhs array, we can first reserve an
 // exact amount of memory needed for insertion of all of them.
 #define WEB_ARRAY_EXTEND(Arena, Lhs, Rhs) do { \
-    for (uz I = 0; I < (Rhs)->Count; ++I) { \
+    for (sz I = 0; I < (Rhs)->Count; ++I) { \
     WEB_ARRAY_PUSH((Arena), (Lhs), (Rhs)->Items[I]); \
     } \
     } while (0)

@@ -42,7 +42,7 @@ u64 WebHashFnv1(web_string_view Input) {
 
     u64 Hash = FnvOffsetBasis;
 
-    for (uz I = 0; I < Input.Count; ++I) {
+    for (sz I = 0; I < Input.Count; ++I) {
         Hash *= FnvPrime;
 
         u8 Byte = Input.Items[I];

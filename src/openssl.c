@@ -14,3 +14,8 @@ sz OpenSSLSessionClose(void *Ptr) {
     SSL *Ssl = (SSL *) Ptr;
     return SSL_shutdown(Ssl);
 }
+
+void WebHttpsProviderInitOpenSSL(web_https_openssl_provider_config *Config, web_https_provider *Provider) {
+    Provider->Type = WEB_HTTPS_PROVIDER_OPENSSL;
+    Provider->Data = Config;
+}

@@ -12,18 +12,6 @@
     extern "C" {
 #endif // __cplusplus
 
-#ifdef WEB_USE_HTTPS_OPENSSL
-typedef struct {
-    const char *CertificateFileName;
-    const char *PrivateKeyFileName;
-} web_https_openssl_provider_config;
-
-sz OpenSSLSessionRead(void *, u8 *, uz);
-sz OpenSSLSessionWrite(void *, u8 *, uz);
-sz OpenSSLSessionClose(void *);
-
-#endif // WEB_USE_HTTPS_OPENSSL
-
 typedef struct {
     sz (*Close)(void *Data);
     sz (*Read) (void *Data, u8 *Buffer, uz N);
@@ -45,6 +33,20 @@ typedef struct {
 
     void *Data;
 } web_https_provider;
+
+#ifdef WEB_USE_HTTPS_OPENSSL
+typedef struct {
+    const char *CertificateFileName;
+    const char *PrivateKeyFileName;
+} web_https_openssl_provider_config;
+
+sz OpenSSLSessionRead(void *, u8 *, uz);
+sz OpenSSLSessionWrite(void *, u8 *, uz);
+sz OpenSSLSessionClose(void *);
+
+void WebHttpsProviderInitOpenSSL(web_https_openssl_provider_config *, web_https_provider *);
+
+#endif // WEB_USE_HTTPS_OPENSSL
 
 #ifdef WEB_USE_HTTPS_OPENSSL
 #    define WEB_CASE_PROVIDER_OPENSSL(C) case WEB_HTTPS_PROVIDER_OPENSSL: { C }

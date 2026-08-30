@@ -46,8 +46,8 @@ typedef struct {
 
 typedef struct {
     web_http_header *Items;
-    uz Count;
-    uz Capacity;
+    sz Count;
+    sz Capacity;
 } web_http_headers;
 
 #define WEB_ENUM_HTTP_VERSIONS \
@@ -165,7 +165,6 @@ typedef web_http_response_status (*web_http_request_handler)(web_http_response_c
 
 typedef struct {
     // TODO(oleh): Probably introduce a thread pool and accepting socket fd here.
-    web_arena Arena;
     web_string_view *HandlersPaths;
     web_http_request_handler *Handlers;
     uz HandlersCount;
@@ -173,6 +172,7 @@ typedef struct {
 } web_http_server;
 
 typedef struct {
+    s64 GlobalPoolCapacity;
     s16 NumThreads;
     b32 UseHttps;
     web_https_provider *HttpsProvider;

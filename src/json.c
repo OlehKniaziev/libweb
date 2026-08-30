@@ -37,8 +37,8 @@ static inline b32 JsonIsTerminalOrWhitespace(u8 Char) {
            Char == ':';
 }
 
-static b32 JsonNextToken(web_arena *Arena, web_string_view Input, uz *Position, json_token *OutToken) {
-    uz CurrentPosition = *Position;
+static b32 JsonNextToken(web_arena *Arena, web_string_view Input, sz *Position, json_token *OutToken) {
+    sz CurrentPosition = *Position;
 
     for (; CurrentPosition < Input.Count; ++CurrentPosition) {
         if (!JsonIsWhitespace(Input.Items[CurrentPosition])) break;
@@ -165,7 +165,7 @@ static b32 JsonNextToken(web_arena *Arena, web_string_view Input, uz *Position, 
         } else {
             int TokenType = TOKEN_NUMBER;
 
-            for (uz I = 0; I < Value.Count; ++I) {
+            for (sz I = 0; I < Value.Count; ++I) {
                 u8 Char = Value.Items[I];
                 if (Char < '0' || Char > '9') {
                     TokenType = TOKEN_ILLEGAL;
@@ -183,10 +183,10 @@ static b32 JsonNextToken(web_arena *Arena, web_string_view Input, uz *Position, 
     }
 }
 
-static b32 JsonPeekToken(web_string_view Input, uz *Position, json_token *OutToken) {
+static b32 JsonPeekToken(web_string_view Input, sz *Position, json_token *OutToken) {
     web_arena *Temp = WebGetTempArena();
 
-    uz SavedPosition = *Position;
+    sz SavedPosition = *Position;
     b32 Result = JsonNextToken(Temp, Input, Position, OutToken);
     *Position = SavedPosition;
     return Result;
@@ -220,7 +220,7 @@ static f64 ParseF64(web_string_view Buffer) {
 
 #define DEFAULT_OBJECT_CAPACITY 37
 
-static b32 JsonParseValue(web_arena *Arena, web_string_view Input, uz *Position, web_json_value *OutValue) {
+static b32 JsonParseValue(web_arena *Arena, web_string_view Input, sz *Position, web_json_value *OutValue) {
     json_token Token;
 
     if (!JsonNextToken(Arena, Input, Position, &Token)) return 0;
@@ -346,7 +346,7 @@ static b32 JsonParseValue(web_arena *Arena, web_string_view Input, uz *Position,
 }
 
 b32 WebJsonParse(web_arena *Arena, web_string_view Input, web_json_value *OutValue) {
-    uz Position = 0;
+    sz Position = 0;
     return JsonParseValue(Arena, Input, &Position, OutValue);
 }
 
@@ -466,13 +466,13 @@ void WebJsonEndArray(void) {
 WEB_PANIC("Arena does not have enough capacity"); \
 } } while (0)
 
-static uz JsonPutStringWithEscaping(web_string_view String, uz Offset) {
+static uz JsonPutStringWithEscaping(web_string_view String, sz Offset) {
     CHECK_CAP();
 
     CurrentJsonArena->Items[Offset] = '"';
     ++Offset;
 
-    for (uz StringIndex = 0; StringIndex < String.Count; ++StringIndex) {
+    for (sz StringIndex = 0; StringIndex < String.Count; ++StringIndex) {
         u8 Char = String.Items[StringIndex];
 
         if (Char == '"') {
@@ -500,7 +500,7 @@ static uz JsonPutStringWithEscaping(web_string_view String, uz Offset) {
 
 
 void WebJsonPutKey(web_string_view Key) {
-    uz Offset = CurrentJsonArena->Offset;
+    sz Offset = CurrentJsonArena->Offset;
 
     if (CurrentJsonState == STATE_DIRTY) {
         CHECK_CAP();
@@ -520,7 +520,7 @@ void WebJsonPutKey(web_string_view Key) {
 }
 
 static void WebJsonPutSpecial(web_string_view Special) {
-    uz BytesRequired = Special.Count;
+    sz BytesRequired = Special.Count;
     WEB_ASSERT(CurrentJsonArena->Capacity - CurrentJsonArena->Offset >= BytesRequired);
 
     u8 *Ptr = CurrentJsonArena->Items + CurrentJsonArena->Offset;
@@ -554,7 +554,7 @@ void WebJsonPutNumber(f64 Number) {
         NumberString = WebArenaFormat(TempArena, "%f", Number);
     }
 
-    uz BytesRequired = NumberString.Count;
+    sz BytesRequired = NumberString.Count;
     WEB_ASSERT(CurrentJsonArena->Capacity - CurrentJsonArena->Offset >= BytesRequired);
 
     u8 *Ptr = CurrentJsonArena->Items + CurrentJsonArena->Offset;
@@ -578,7 +578,7 @@ void WebJsonPutString(web_string_view String) {
 
 void WebJsonPrepareArrayElement(void) {
     if (CurrentJsonState == STATE_DIRTY) {
-        const uz BytesRequired = 1;
+        const sz BytesRequired = 1;
 
         WEB_ASSERT(CurrentJsonArena->Capacity - CurrentJsonArena->Offset >= BytesRequired);
 

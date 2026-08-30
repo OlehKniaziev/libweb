@@ -68,17 +68,17 @@ static sz HttpReceive(worker_data *WorkerData, u8 *Buffer, uz BufferCapacity) {
 }
 
 static void HttpHeadersFormat(web_arena *Arena, web_dynamic_string *String, web_http_headers Headers) {
-    for (uz HeaderIndex = 0; HeaderIndex < Headers.Count; ++HeaderIndex) {
+    for (sz HeaderIndex = 0; HeaderIndex < Headers.Count; ++HeaderIndex) {
         web_http_header Header = Headers.Items[HeaderIndex];
 
-        for (uz I = 0; I < Header.Name.Count; ++I) {
+        for (sz I = 0; I < Header.Name.Count; ++I) {
             WEB_ARRAY_PUSH(Arena, String, Header.Name.Items[I]);
         }
 
         WEB_ARRAY_PUSH(Arena, String, ':');
         WEB_ARRAY_PUSH(Arena, String, ' ');
 
-        for (uz I = 0; I < Header.Value.Count; ++I) {
+        for (sz I = 0; I < Header.Value.Count; ++I) {
             WEB_ARRAY_PUSH(Arena, String, Header.Value.Items[I]);
         }
 
@@ -170,6 +170,390 @@ static int HttpsAcceptConnection(web_https_provider *Provider, int Sock, web_htt
     WEB_UNREACHABLE();
 }
 
+static sz HttpRequestParseHeader(u8 *Buffer,
+                                 uz BufferCount,
+                                 web_http_header *Header) {
+    uz I = 0;
+
+    for (; I < BufferCount; ++I) {
+        if (Buffer[I] == ':') break;
+    }
+
+    if (I >= BufferCount) {
+        return -1;
+    }
+
+    Header->Name = (web_string_view) {.Items = Buffer, .Count = I};
+
+    uz HeaderValueStart = I + 2;
+
+    for (I = HeaderValueStart; I < BufferCount; ++I) {
+        if (Buffer[I] == '\r') break;
+    }
+
+    if (I >= BufferCount) {
+        return -1;
+    }
+
+    if (BufferCount - I <= 1) {
+        return -1;
+    }
+
+    u8 NewlineChar = Buffer[I + 1];
+    if (NewlineChar != '\n') {
+        return -1;
+    }
+
+    Header->Value = (web_string_view) {.Items = Buffer + HeaderValueStart, .Count = I - HeaderValueStart};
+
+    return I + 2;
+}
+
+// TODO(oleh): This should be more strict, i.e. now it does not check that the ':' is before the CRLF.
+static sz ParseHeaders(web_arena *Arena,
+                       web_string_view Buffer,
+                       web_http_headers *Headers) {
+    for (sz I = 0; I < Buffer.Count; ) {
+        if (Buffer.Items[I] == '\r' && Buffer.Count - I > 1 && Buffer.Items[I + 1] == '\n') {
+            return I + 2;
+        }
+
+        web_http_header Header = {0};
+        sz N = HttpRequestParseHeader(Buffer.Items + I, Buffer.Count - I, &Header);
+        if (N < 0) {
+            return -1;
+        }
+
+        I += N;
+
+        WEB_ARRAY_PUSH(Arena, Headers, Header);
+    }
+
+    return -1;
+}
+
+static b32 ParseHTTPVersion(web_string_view Input, web_http_version *Version) {
+#define X(HttpVersion, VersionString) if (WebStringViewEqualCStr(Input, VersionString)) { \
+    *Version = HTTP_##HttpVersion; \
+    return 1; \
+    }
+WEB_ENUM_HTTP_VERSIONS
+#undef X
+
+    return 0;
+}
+
+static b32 ParseStatusCode(web_string_view Buffer, web_http_response_status *StatusCode) {
+    s64 StatusCodeNum;
+    if (!WebParseS64(Buffer, &StatusCodeNum)) return 0;
+
+#define X(Name, Code, Reason) if (StatusCodeNum == Code) { \
+    *StatusCode = HTTP_STATUS_##Name; \
+    return 1; \
+    }
+WEB_ENUM_HTTP_RESPONSE_STATUSES
+#undef X
+
+    return 0;
+}
+
+static sz ParseStatusLine(web_string_view Buffer,
+                          web_http_version *Version,
+                          web_http_response_status *StatusCode) {
+    sz I;
+    for (I = 0; I < Buffer.Count; ++I) {
+        if (Buffer.Items[I] == ' ') break;
+    }
+
+    if (I >= Buffer.Count) return 0;
+
+    web_string_view HttpVersionSv = {.Items = Buffer.Items, .Count = I};
+
+    if (!ParseHTTPVersion(HttpVersionSv, Version)) return 0;
+
+    uz StatusCodeStart = I + 1;
+
+    for (I = StatusCodeStart; I < Buffer.Count; ++I) {
+        if (Buffer.Items[I] == ' ') break;
+    }
+
+    if (I >= Buffer.Count) return 0;
+
+    web_string_view StatusCodeSv = {.Items = Buffer.Items + StatusCodeStart, .Count = I - StatusCodeStart};
+
+    if (!ParseStatusCode(StatusCodeSv, StatusCode)) return 0;
+
+    sz ReasonStart = I + 1;
+    for (I = ReasonStart; I < Buffer.Count; ++I) {
+        if (Buffer.Items[I] == '\r') break;
+    }
+
+    ++I;
+    if (I >= Buffer.Count) return 0;
+
+    if (Buffer.Items[I] != '\n') return 0;
+
+    return I + 1;
+}
+
+b32 WebHttpResponseParse(web_arena *Arena, web_string_view Buffer, web_http_response *OutResponse) {
+    // 1. Response line. (https://datatracker.ietf.org/doc/html/rfc2616#section-6.1)
+    // 1.1. Version.
+
+    sz I = ParseStatusLine(Buffer,
+                           &OutResponse->Version,
+                           &OutResponse->Status);
+    if (I < 0) {
+        return 0;
+    }
+
+    web_http_headers Headers;
+    WEB_ARRAY_INIT(Arena, &Headers);
+
+    Buffer.Items += I;
+    Buffer.Count -= I;
+
+    sz N = ParseHeaders(Arena, Buffer, &Headers);
+    if (N < 0) {
+        return 0;
+    }
+
+    I += N;
+
+    web_string_view ResponseBody = {.Items = Buffer.Items + I, .Count = Buffer.Count - I};
+
+    OutResponse->Body = ResponseBody;
+    OutResponse->Headers = Headers;
+
+    return 1;
+}
+
+static b32 ParseHTTPMethod(web_string_view Input, web_http_method *Out) {
+#define X(Method) if (WebStringViewEqualCStr(Input, #Method)) {  \
+    *Out = HTTP_##Method;                                  \
+    return 1; \
+    }
+
+WEB_ENUM_HTTP_METHODS
+
+#undef X
+
+    return 0;
+}
+
+static sz ParseRequestLine(web_string_view Buffer,
+                           web_http_method *Method,
+                           web_string_view *Path,
+                           web_http_version *Version) {
+    sz I;
+    for (I = 0; I < Buffer.Count; ++I) {
+        if (Buffer.Items[I] == ' ') break;
+    }
+
+    if (I >= Buffer.Count) {
+        return -1;
+    }
+
+    web_http_method RequestMethod;
+    web_string_view RequestMethodSv = {.Items = Buffer.Items, .Count = I};
+    if (!ParseHTTPMethod(RequestMethodSv, &RequestMethod)) {
+        return -1;
+    }
+
+    // 1.2. Request URI. (https://datatracker.ietf.org/doc/html/rfc2616#section-5.1.2)
+    // FIXME(oleh): Actually parse URI's.
+
+    uz PathStart = I + 1;
+
+    for (I = PathStart; I < Buffer.Count; ++I) {
+        if (Buffer.Items[I] == ' ') break;
+    }
+
+    if (I >= Buffer.Count) {
+        return -1;
+    }
+
+    web_string_view RequestPath = {.Items = Buffer.Items + PathStart, .Count = I - PathStart};
+
+    // 1.3. HTTP version.
+
+    uz VersionStart = I + 1;
+
+    for (I = VersionStart; I < Buffer.Count; ++I) {
+        if (Buffer.Items[I] == '\r') break;
+    }
+
+    if (I >= Buffer.Count) {
+        return -1;
+    }
+
+    web_http_version RequestVersion;
+    web_string_view VersionSv = {.Items = Buffer.Items + VersionStart, .Count = I - VersionStart};
+
+    if (!ParseHTTPVersion(VersionSv, &RequestVersion)) return -1;
+
+    // 1.4. CRLF.
+
+    if (Buffer.Count - I <= 1) {
+        return -1;
+    }
+
+    u8 NewlineChar = Buffer.Items[I + 1];
+    if (NewlineChar != '\n') {
+        return -1;
+    }
+
+    *Method = RequestMethod;
+    *Path = RequestPath;
+    *Version = RequestVersion;
+
+    return I + 2;
+}
+
+b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_request *OutRequest, web_string_view *Error) {
+    // 1. Request line. (https://datatracker.ietf.org/doc/html/rfc2616#section-5.1)
+    // 1.1. Method. (https://datatracker.ietf.org/doc/html/rfc2616#section-5.1.1)
+    sz N = ParseRequestLine(Buffer,
+                            &OutRequest->Method,
+                            &OutRequest->Path,
+                            &OutRequest->Version);
+
+    if (N == -1) {
+        *Error = WEB_SV_LIT("Could not parse the request line");
+        return 0;
+    }
+
+    Buffer.Items += N;
+    Buffer.Count -= N;
+
+    // 2. Headers. (https://datatracker.ietf.org/doc/html/rfc2616#section-5.3)
+    // FIXME(oleh): Actually parse the headers according to their specification.
+
+    web_http_headers Headers;
+    WEB_ARRAY_INIT(Arena, &Headers);
+
+    sz I = 0;
+
+    N = ParseHeaders(Arena, Buffer, &Headers);
+    if (N < 0) {
+        *Error = WebArenaFormat(Arena,
+                                "could not parse the request headers: " WEB_SV_FMT,
+                                WEB_SV_ARG(*Error));
+        return 0;
+    }
+
+    I += N;
+
+    WEB_ASSERT(I <= Buffer.Count);
+
+    // 3. Message body. (https://datatracker.ietf.org/doc/html/rfc2616#section-4.3)
+    web_string_view RequestBody = {.Items = Buffer.Items + I, .Count = Buffer.Count - I};
+
+    OutRequest->Headers = Headers;
+    OutRequest->Body = RequestBody;
+
+    return 1;
+}
+
+#define CONTENT_LENGTH_HEADER "Content-Length"
+
+static void ParseContentLength(web_http_header Header, s64 *ContentLength) {
+    b32 Ok = WebParseS64(Header.Value, ContentLength);
+    if (!Ok) {
+        WEB_LOG_FMT(WARN,
+                    HTTP,
+                    "Failed to parse received " CONTENT_LENGTH_HEADER "header value as an integer; value=" WEB_SV_FMT,
+                    WEB_SV_ARG(Header.Value));
+        *ContentLength = -1;
+    }
+}
+
+static b32 HttpResponseParseStreaming(worker_data *WorkerData, web_http_response *Resp) {
+    web_arena *Arena = &WorkerData->Context->Arena;
+
+    web_http_version Version;
+    web_http_response_status Code;
+
+    web_http_headers Headers = {0};
+    WEB_ARRAY_INIT(Arena, &Headers);
+
+    uz BufferCount = 0;
+    uz BufferCapacity = 1024;
+    u8 *Buffer = WEB_ARENA_PUSH_ZERO(Arena, BufferCapacity);
+
+    uz ParseOffset = 0;
+
+    s64 ContentLength = -1;
+
+    b32 ParsedHeaders = 0;
+
+    if (BufferCount >= BufferCapacity) {
+        uz NewCapacity = BufferCapacity << 1;
+        WebArenaRealloc(Arena, Buffer, BufferCapacity, NewCapacity);
+        BufferCapacity = NewCapacity;
+    }
+
+ReceiveLoop:
+    sz N = HttpReceive(WorkerData, Buffer, BufferCapacity);
+    if (N < 0) {
+        return 0;
+    }
+
+    BufferCount += N;
+
+    if (ParsedHeaders) {
+        goto ParseBody;
+    }
+
+    web_string_view StatusLineSv = {.Items = Buffer + ParseOffset, .Count = BufferCount - ParseOffset};
+
+    N = ParseStatusLine(StatusLineSv,
+                        &Version,
+                        &Code);
+    if (N < 0) {
+        return 0;
+    }
+
+    ParseOffset += N;
+
+    web_string_view HeadersSv = {.Items = Buffer + ParseOffset, .Count = BufferCount - ParseOffset};
+    N = ParseHeaders(Arena, HeadersSv, &Headers);
+    if (N < 0) {
+        return 0;
+    }
+
+    ParsedHeaders = 1;
+
+    ParseOffset += N;
+
+    for (sz HeaderIdx = 0; HeaderIdx < Headers.Count; ++HeaderIdx) {
+        web_http_header Header = Headers.Items[HeaderIdx];
+        if (WebStringViewEqualCStr(Header.Name, CONTENT_LENGTH_HEADER)) {
+            ParseContentLength(Header, &ContentLength);
+        }
+    }
+
+ParseBody:
+    if (ContentLength < 0) {
+        Resp->Body = (web_string_view) {.Items = Buffer + ParseOffset, .Count = BufferCount - ParseOffset};
+        Resp->Headers = Headers;
+        Resp->Version = Version;
+        Resp->Status = Code;
+        return 1;
+    }
+
+    sz Have = BufferCount - ParseOffset;
+    if (Have >= ContentLength) {
+        Resp->Body = (web_string_view) {.Items = Buffer + ParseOffset, .Count = ContentLength};
+        Resp->Headers = Headers;
+        Resp->Version = Version;
+        Resp->Status = Code;
+        return 1;
+    }
+
+    goto ReceiveLoop;
+}
+
 // NOTE(oleh): Not sure if it's fine to use temp here for most of the stuff as the temp arena is kinda
 // expected to be small.
 static void HttpRequestSendProc(void *DataPtr) {
@@ -181,35 +565,30 @@ static void HttpRequestSendProc(void *DataPtr) {
 
     web_string_view RequestString = HttpRequestToString(Temp, WorkerData->Request);
 
-    int Status = HttpSend(WorkerData, RequestString);
-    if (Status == -1) {
-        Result = 0;
-        goto End;
+    // FIXME(oleh): Refer to the spec to see if this is actually a valid thing to do or it should be
+    // headers + streamed body.
+    while (RequestString.Count > 0) {
+        sz N = HttpSend(WorkerData, RequestString);
+        if (N == -1) {
+            Result = 0;
+            goto End;
+        }
+
+        RequestString.Items += N;
+        RequestString.Count -= N;
     }
 
-    uz ResponseArenaAvailableMemory = WebArenaAvail(&WorkerData->Context->Arena);
-    // FIXME(oleh): Replace the magic number.
-    uz ResponseBufferCount = WEB_MIN(ResponseArenaAvailableMemory / 16, WEB_HTTP_RESPONSE_MAX_SIZE);
-    u8 *ResponseBuffer = WebArenaPush(Temp, ResponseBufferCount);
-
-    Status = read(WorkerData->Sock, ResponseBuffer, ResponseBufferCount);
-    if (Status == -1) {
-        Result = 0;
-        goto End;
-    }
-
-    web_string_view ResponseSv = {
-        .Items = ResponseBuffer,
-        .Count = Status,
-    };
-
-    if (!WebHttpResponseParse(Temp, ResponseSv, WorkerData->Response)) {
+    if (!HttpResponseParseStreaming(WorkerData, WorkerData->Response)) {
         Result = 0;
         goto End;
     }
 
 End:
     WorkerData->StatusBit = Result;
+}
+
+static sz HttpsCloseConnection(web_https_session *Sess) {
+    return Sess->VTable.Close(Sess->Data);
 }
 
 b32 WebHttpRequestSend(web_http_context *Context,
@@ -282,285 +661,11 @@ End:
         freeaddrinfo(ServerAddr);
     }
 
-    return Result;
-}
-
-static sz HttpRequestParseHeader(u8 *Buffer,
-                                 uz BufferCount,
-                                 web_http_header *Header) {
-    uz I = 0;
-
-    for (; I < BufferCount; ++I) {
-        if (Buffer[I] == ':') break;
+    if (Context->UseHttps) {
+        HttpsCloseConnection(&HttpsSession);
     }
-
-    if (I >= BufferCount) {
-        return -1;
-    }
-
-    Header->Name = (web_string_view) {.Items = Buffer, .Count = I};
-
-    uz HeaderValueStart = I + 2;
-
-    for (I = HeaderValueStart; I < BufferCount; ++I) {
-        if (Buffer[I] == '\r') break;
-    }
-
-    if (I >= BufferCount) {
-        return -1;
-    }
-
-    if (BufferCount - I <= 1) {
-        return -1;
-    }
-
-    u8 NewlineChar = Buffer[I + 1];
-    if (NewlineChar != '\n') {
-        return -1;
-    }
-
-    Header->Value = (web_string_view) {.Items = Buffer + HeaderValueStart, .Count = I - HeaderValueStart};
-
-    return I + 2;
-}
-
-// TODO(oleh): This should be more strict, i.e. now it does not check that the ':' is before the CRLF.
-static b32 HttpHeadersParse(web_arena *Arena,
-                            web_string_view Buffer,
-                            uz *Offset,
-                            web_http_headers *Headers) {
-    b32 Result = 1;
-    uz I;
-
-    for (I = *Offset; I < Buffer.Count; ) {
-        if (Buffer.Items[I] == '\r' && Buffer.Count - I > 1 && Buffer.Items[I + 1] == '\n') goto Success;
-
-        web_http_header Header = {0};
-        sz N = HttpRequestParseHeader(Buffer.Items + I, Buffer.Count - I, &Header);
-        if (N == -1) {
-            return 0;
-        }
-
-        I += N;
-
-        WEB_ARRAY_PUSH(Arena, Headers, Header);
-    }
-
-    Result = 0;
-
-Success:
-    *Offset = I + 2;
 
     return Result;
-}
-
-b32 WebHttpResponseParse(web_arena *Arena, web_string_view Buffer, web_http_response *OutResponse) {
-    // 1. Response line. (https://datatracker.ietf.org/doc/html/rfc2616#section-6.1)
-    // 1.1. Version.
-
-    uz I;
-    for (I = 0; I < Buffer.Count; ++I) {
-        if (Buffer.Items[I] == ' ') break;
-    }
-
-    if (I >= Buffer.Count) return 0;
-
-    web_http_version HttpVersion;
-    web_string_view HttpVersionSv = {.Items = Buffer.Items, .Count = I};
-#define X(Version, VersionString) if (WebStringViewEqualCStr(HttpVersionSv, VersionString)) { \
-    HttpVersion = HTTP_##Version; \
-    goto ResponseVersionSuccess; \
-    }
-WEB_ENUM_HTTP_VERSIONS
-#undef X
-
-    // Failed to parse the version.
-    return 0;
-
-ResponseVersionSuccess: ;
-    uz StatusCodeStart = I + 1;
-
-    for (I = StatusCodeStart; I < Buffer.Count; ++I) {
-        if (Buffer.Items[I] == ' ') break;
-    }
-
-    if (I >= Buffer.Count) return 0;
-
-    s64 StatusCodeNum;
-    web_string_view StatusCodeSv = {.Items = Buffer.Items + StatusCodeStart, .Count = I - StatusCodeStart};
-    if (!WebParseS64(StatusCodeSv, &StatusCodeNum)) return 0;
-
-    web_http_response_status StatusCode;
-
-    uz ReasonStart = I + 1;
-    for (I = ReasonStart; I < Buffer.Count; ++I) {
-        if (Buffer.Items[I] == '\r') break;
-    }
-
-    web_string_view ReasonPhrase = {.Items = Buffer.Items + ReasonStart, .Count = I - ReasonStart};
-
-    ++I;
-    if (I >= Buffer.Count) return 0;
-
-    if (Buffer.Items[I] != '\n') return 0;
-
-    // NOTE(oleh): This reason phrase is not required to be matching the status code, so maybe
-    // we should just not check if it matches?
-#define X(Name, Code, Reason) if (StatusCodeNum == Code && WebStringViewEqualCStr(ReasonPhrase, Reason)) { StatusCode = HTTP_STATUS_##Name; goto ResponseStatusSuccess; }
-WEB_ENUM_HTTP_RESPONSE_STATUSES
-#undef X
-
-    // Failed to parse response status code.
-    return 0;
-ResponseStatusSuccess: ;
-    ++I;
-
-    web_http_headers Headers;
-    WEB_ARRAY_INIT(Arena, &Headers);
-
-    if (!HttpHeadersParse(Arena, Buffer, &I, &Headers)) return 0;
-
-    web_string_view ResponseBody = {.Items = Buffer.Items + I, .Count = Buffer.Count - I};
-
-    OutResponse->Version = HttpVersion;
-    OutResponse->Body = ResponseBody;
-    OutResponse->Status = StatusCode;
-    OutResponse->Headers = Headers;
-    return 1;
-}
-
-static sz HttpRequestParseRequestLine(u8 *Buffer,
-                                      uz BufferCount,
-                                      web_http_method *Method,
-                                      web_string_view *Path,
-                                      web_http_version *Version) {
-    uz I;
-    for (I = 0; I < BufferCount; ++I) {
-        if (Buffer[I] == ' ') break;
-    }
-
-    if (I >= BufferCount) {
-        return -1;
-    }
-
-    web_http_method RequestMethod;
-    web_string_view RequestMethodSv = {.Items = Buffer, .Count = I};
-#define X(Method) if (WebStringViewEqualCStr(RequestMethodSv, #Method)) {  \
-        RequestMethod = HTTP_##Method;                                  \
-        goto RequestMethodSuccess;                                      \
-    }
-
-    WEB_ENUM_HTTP_METHODS
-
-#undef X
-
-    // Failed to parse the HTTP method.
-    return -1;
-
- RequestMethodSuccess: ;
-    // 1.2. Request URI. (https://datatracker.ietf.org/doc/html/rfc2616#section-5.1.2)
-    // FIXME(oleh): Actually parse URI's.
-
-    uz PathStart = I + 1;
-
-    for (I = PathStart; I < BufferCount; ++I) {
-        if (Buffer[I] == ' ') break;
-    }
-
-    if (I >= BufferCount) {
-        return -1;
-    }
-
-    web_string_view RequestPath = {.Items = Buffer + PathStart, .Count = I - PathStart};
-
-    // 1.3. HTTP version.
-
-    uz VersionStart = I + 1;
-
-    for (I = VersionStart; I < BufferCount; ++I) {
-        if (Buffer[I] == '\r') break;
-    }
-
-    if (I >= BufferCount) {
-        return -1;
-    }
-
-    web_http_version RequestVersion;
-    web_string_view VersionSv = {.Items = Buffer + VersionStart, .Count = I - VersionStart};
-
-#define X(Version, String) if (WebStringViewEqualCStr(VersionSv, String)) { \
-        RequestVersion = HTTP_##Version;                                \
-        goto RequestVersionSuccess;                                     \
-    }
-
-    WEB_ENUM_HTTP_VERSIONS
-#undef X
-
-    // NOTE(oleh): Failed to recognize the HTTP version.
-    return -1;
- RequestVersionSuccess:
-    // 1.4. CRLF.
-
-    if (BufferCount - I <= 1) {
-        return -1;
-    }
-
-    u8 NewlineChar = Buffer[I + 1];
-    if (NewlineChar != '\n') {
-        return -1;
-    }
-
-    *Method = RequestMethod;
-    *Path = RequestPath;
-    *Version = RequestVersion;
-
-    return I + 2;
-}
-
-b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_request *OutRequest, web_string_view *Error) {
-    // 1. Request line. (https://datatracker.ietf.org/doc/html/rfc2616#section-5.1)
-    // 1.1. Method. (https://datatracker.ietf.org/doc/html/rfc2616#section-5.1.1)
-    sz N = HttpRequestParseRequestLine(Buffer.Items,
-                                       0,
-                                       &OutRequest->Method,
-                                       &OutRequest->Path,
-                                       &OutRequest->Version);
-
-    if (N == -1) {
-        *Error = WEB_SV_LIT("Could not parse the request line");
-        return 0;
-    }
-
-    Buffer.Items += N;
-    Buffer.Count -= N;
-
-    // 2. Headers. (https://datatracker.ietf.org/doc/html/rfc2616#section-5.3)
-    // FIXME(oleh): Actually parse the headers according to their specification.
-
-    web_http_headers Headers;
-    WEB_ARRAY_INIT(Arena, &Headers);
-
-    uz I = 0;
-
-    N = HttpHeadersParse(Arena, Buffer, &I, &Headers);
-    if (N == -1) {
-        *Error = WebArenaFormat(Arena,
-                                "could not parse the request headers: " WEB_SV_FMT,
-                                WEB_SV_ARG(*Error));
-        return 0;
-    }
-
-    I += N;
-
-    WEB_ASSERT(I <= Buffer.Count);
-
-    // 3. Message body. (https://datatracker.ietf.org/doc/html/rfc2616#section-4.3)
-    web_string_view RequestBody = {.Items = Buffer.Items + I, .Count = Buffer.Count - I};
-
-    OutRequest->Headers = Headers;
-    OutRequest->Body = RequestBody;
-
-    return 1;
 }
 
 static const char *GetHttpResponseStatusReasonPhrase(web_http_response_status Status) {
@@ -592,7 +697,7 @@ static b32 HttpRequestParseStreaming(worker_data *WorkerData,
     sz ParseOffset = 0;
     sz N = 0;
 
-    sz BufferSize = 0;
+    sz BufferCount = 0;
     sz BufferCapacity = INITIAL_PARSE_BUFFER_CAPACITY;
     u8 *Buffer = WebArenaPush(Arena, BufferCapacity);
 
@@ -604,9 +709,9 @@ static b32 HttpRequestParseStreaming(worker_data *WorkerData,
     WEB_ARRAY_INIT(Arena, &Headers);
 
 ReceiveLoop:
-    if (BufferSize >= BufferCapacity) {
+    if (BufferCount >= BufferCapacity) {
         BufferCapacity <<= 1;
-        Buffer = WebArenaRealloc(Arena, Buffer, BufferSize, BufferCapacity);
+        Buffer = WebArenaRealloc(Arena, Buffer, BufferCount, BufferCapacity);
     }
 
     N = HttpReceive(WorkerData, Buffer + WriteOffset, BufferCapacity - WriteOffset);
@@ -616,21 +721,21 @@ ReceiveLoop:
     }
 
     WriteOffset += N;
-    BufferSize += N;
+    BufferCount += N;
 
     switch (ParseState) {
     case PARSE_STATE_REQUEST_LINE: goto ParseRequestLine;
     case PARSE_STATE_HEADERS:      goto ParseHeaders;
     case PARSE_STATE_BODY:         goto ParseBody;
-    default:                       WEB_UNREACHABLE();
     }
 
 ParseRequestLine:
-    N = HttpRequestParseRequestLine(Buffer + ParseOffset,
-                                    BufferSize - ParseOffset,
-                                    &Request->Method,
-                                    &Request->Path,
-                                    &Request->Version);
+    web_string_view RequestLineSv = {.Items = Buffer + ParseOffset, .Count = BufferCount - ParseOffset};
+
+    N = ParseRequestLine(RequestLineSv,
+                         &Request->Method,
+                         &Request->Path,
+                         &Request->Version);
     if (N == -1) {
         WEB_LOG(ERROR, HTTP, "Failed to parse the request line");
         return 0;
@@ -641,15 +746,15 @@ ParseRequestLine:
     ParseState = PARSE_STATE_HEADERS;
 
 ParseHeaders:
-    while (ParseOffset < BufferSize) {
-        if (ParseOffset < BufferSize - 1 &&
+    while (ParseOffset < BufferCount) {
+        if (ParseOffset < BufferCount - 1 &&
             Buffer[ParseOffset] == '\r' && Buffer[ParseOffset + 1] == '\n') {
             ParseOffset += 2;
             ParseState = PARSE_STATE_BODY;
             break;
         }
 
-        N = HttpRequestParseHeader(Buffer + ParseOffset, BufferSize - ParseOffset, &Header);
+        N = HttpRequestParseHeader(Buffer + ParseOffset, BufferCount - ParseOffset, &Header);
         if (N == -1) {
             WEB_LOG(ERROR, HTTP, "Failed to parse a request's header");
             return 0;
@@ -659,22 +764,16 @@ ParseHeaders:
 
         WEB_ARRAY_PUSH(Arena, &Headers, Header);
 
-        if (WebStringViewEqualCStr(Header.Name, "Content-Length")) {
-            if (!WebParseS64(Header.Value, &ContentLength)) {
-                WEB_LOG_FMT(WARN,
-                            HTTP,
-                            "Failed to parse received Content-Length header value as an integer; value=" WEB_SV_FMT,
-                            WEB_SV_ARG(Header.Value));
-                ContentLength = -1;
-            }
+        if (WebStringViewEqualCStr(Header.Name, CONTENT_LENGTH_HEADER)) {
+            ParseContentLength(Header, &ContentLength);
         }
     }
 
-    if (ParseState == PARSE_STATE_HEADERS && ParseOffset >= BufferSize) goto ReceiveLoop;
+    if (ParseState == PARSE_STATE_HEADERS && ParseOffset >= BufferCount) goto ReceiveLoop;
 
 ParseBody:
     if (ContentLength >= 0) {
-        if (BufferSize - ParseOffset >= ContentLength) {
+        if (BufferCount - ParseOffset >= ContentLength) {
             Request->Body.Items = Buffer + ParseOffset;
             Request->Body.Count = ContentLength;
             return 1;
@@ -684,13 +783,9 @@ ParseBody:
     } else {
         // TODO(oleh): Maybe this should go back to the receive loop with some timeout checks.
         Request->Body.Items = Buffer + ParseOffset;
-        Request->Body.Count = BufferSize - ParseOffset;
+        Request->Body.Count = BufferCount - ParseOffset;
         return 1;
     }
-}
-
-static sz HttpsCloseConnection(web_https_session *Sess) {
-    return Sess->VTable.Close(Sess->Data);
 }
 
 static void ServerWorker(void *Arg) {
@@ -856,6 +951,7 @@ void WebHttpServerStart(web_http_server *Server, u16 Port) {
 
 // NOTE(oleh): Need to make sure that we are running on a system with virtual memory.
 #define HTTP_SERVER_ARENA_CAPACITY (4ll * 1024ll * 1024ll * 1024ll)
+#define HTTP_CONTEXT_ARENA_CAPACITY (4ll * 1024ll * 1024ll * 1024ll)
 
 // If you need more, seek help.
 #define HTTP_SERVER_MAX_HANDLERS (100)
@@ -934,6 +1030,12 @@ static void *NewTaskProc(uz *Size) {
 }
 
 b32 WebHttpContextInit(web_http_context_config *Config, web_http_context *Context) {
+    if (Config->GlobalPoolCapacity <= 0) {
+        Config->GlobalPoolCapacity = HTTP_CONTEXT_ARENA_CAPACITY;
+    }
+
+    WebArenaInit(&Context->Arena, Config->GlobalPoolCapacity);
+
     WebSyncPoolInit(&Context->WorkerPool, NewWorkerDataPoolProc);
     WebSyncPoolInit(&Context->TaskPool, NewTaskProc);
     WebSyncPoolInit(&Context->ResponseContextPool, NewContextPoolProc);
@@ -944,16 +1046,16 @@ b32 WebHttpContextInit(web_http_context_config *Config, web_http_context *Contex
 }
 
 b32 WebHttpServerInit(web_http_context *Context, web_http_server *Server) {
+    Server->Context = Context;
+
     if (Context->UseHttps) {
         WEB_VERIFY(Context->HttpsProvider != NULL);
 
         HttpsInit(Context->HttpsProvider);
     }
 
-    WebArenaInit(&Server->Arena, HTTP_SERVER_ARENA_CAPACITY);
-
-    Server->Handlers = WebArenaPush(&Server->Arena, sizeof(*Server->Handlers) * HTTP_SERVER_MAX_HANDLERS);
-    Server->HandlersPaths = WebArenaPush(&Server->Arena, sizeof(*Server->HandlersPaths) * HTTP_SERVER_MAX_HANDLERS);
+    Server->Handlers = WebArenaPush(&Context->Arena, sizeof(*Server->Handlers) * HTTP_SERVER_MAX_HANDLERS);
+    Server->HandlersPaths = WebArenaPush(&Context->Arena, sizeof(*Server->HandlersPaths) * HTTP_SERVER_MAX_HANDLERS);
 
     Server->HandlersCount = 0;
 

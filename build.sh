@@ -4,7 +4,7 @@ set -e
 
 FLAGS="-g -Wall -Wextra -Werror -Og -fpic"
 BUILDTYPE=static
-SOURCES="src/http.c src/json.c src/common.c src/base64.c src/threadpool.c src/log.c"
+SOURCES="src/http.c src/json.c src/common.c src/base64.c src/threadpool.c src/log.c src/pool.c"
 
 while getopts "de" flag; do
     case $flag in

@@ -62,16 +62,18 @@ int main(int ArgsCount, char **Args) {
         .CertificateFileName = CertFileName,
         .PrivateKeyFileName = KeyFileName,
     };
-    web_https_provider Provider = {
-        .Type = WEB_HTTPS_PROVIDER_OPENSSL,
-        .Data = &OpenSSLConfig,
-    };
-    web_http_server_config Config = {
+    web_https_provider Provider = {0};
+
+    WebHttpsProviderInitOpenSSL(&OpenSSLConfig, &Provider);
+
+    web_http_context_config Config = {
         .UseHttps = 1,
         .HttpsProvider = &Provider,
     };
+    web_http_context Context = {0};
 
-    WEB_VERIFY(WebHttpServerInit(&Server, &Config));
+    WEB_VERIFY(WebHttpContextInit(&Config, &Context));
+    WEB_VERIFY(WebHttpServerInit(&Context, &Server));
 
     WebHttpServerAttachHandler(&Server, "/", RootHandler);
 

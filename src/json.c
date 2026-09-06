@@ -311,7 +311,7 @@ static b32 JsonParseValue(web_arena *Arena, web_string_view Input, sz *Position,
                 Object.Capacity = NewCapacity;
             }
 
-            u64 ObjectIndex = WebHashFnv1(KeyToInsert) % Object.Capacity;
+            sz ObjectIndex = (sz) WebHashFnv1(KeyToInsert) % Object.Capacity;
 
             while (1) {
                 web_string_view CurrentKey = Object.Keys[ObjectIndex];
@@ -351,8 +351,8 @@ b32 WebJsonParse(web_arena *Arena, web_string_view Input, web_json_value *OutVal
 }
 
 b32 WebJsonObjectGet(const web_json_object *Object, web_string_view SearchKey, web_json_value *OutValue) {
-    u64 StartIndex = WebHashFnv1(SearchKey) % Object->Capacity;
-    u64 CurrentIndex = StartIndex;
+    sz StartIndex = (sz) WebHashFnv1(SearchKey) % Object->Capacity;
+    sz CurrentIndex = StartIndex;
 
     do {
         web_string_view CurrentKey = Object->Keys[CurrentIndex];
@@ -409,181 +409,129 @@ b32 WebJsonObjectGetU64(const web_json_object *Object, web_string_view Key, u64 
     return 1;
 }
 
-static web_arena *CurrentJsonArena;
-static uz CurrentJsonStart;
-
-enum {
+typedef enum {
     STATE_CLEAN,
     STATE_DIRTY,
-} CurrentJsonState;
+} json_state;
 
-void WebJsonBegin(web_arena *Arena) {
-    CurrentJsonArena = Arena;
-    CurrentJsonStart = Arena->Offset;
-    CurrentJsonState = STATE_CLEAN;
+typedef struct {
+    web_arena *Arena;
+    json_state State;
+    web_dynamic_string OutputString;
+} writer_state;
+
+static void WriteChar(writer_state *Writer, u8 Char) {
+    WEB_ARRAY_PUSH(Writer->Arena, &Writer->OutputString, Char);
 }
 
-web_string_view WebJsonEnd(void) {
-    uz JsonCount = CurrentJsonArena->Offset - CurrentJsonStart;
-    web_string_view Result = {.Items = CurrentJsonArena->Items + CurrentJsonStart, .Count = JsonCount};
-    CurrentJsonArena->Offset = WebAlignForward(CurrentJsonArena->Offset, sizeof(uz));
+web_json_writer WebJsonBegin(web_arena *Arena) {
+    writer_state *Writer = WEB_ARENA_NEW(Arena, writer_state);
+    Writer->Arena = Arena;
+    Writer->State = STATE_CLEAN;
+    WEB_ARRAY_INIT(Writer->Arena, &Writer->OutputString);
+    return (web_json_writer) Writer;
+}
+
+web_string_view WebJsonEnd(web_json_writer WriterPtr) {
+    writer_state *Writer = (writer_state *) WriterPtr;
+    web_string_view Result = {.Items = Writer->OutputString.Items, .Count = Writer->OutputString.Count};
     return Result;
 }
 
-void WebJsonBeginObject(void) {
-    WEB_ASSERT(CurrentJsonArena->Capacity - CurrentJsonArena->Offset >= 1);
-    u8 *Ptr = CurrentJsonArena->Items + CurrentJsonArena->Offset;
-    *Ptr = '{';
-    CurrentJsonArena->Offset += 1;
-    CurrentJsonState = STATE_CLEAN;
+void WebJsonBeginObject(web_json_writer WriterPtr) {
+    writer_state *Writer = (writer_state *) WriterPtr;
+    WriteChar(Writer, '{');
+    Writer->State = STATE_CLEAN;
 }
 
-void WebJsonEndObject(void) {
-    WEB_ASSERT(CurrentJsonArena->Capacity - CurrentJsonArena->Offset >= 1);
-    u8 *Ptr = CurrentJsonArena->Items + CurrentJsonArena->Offset;
-    *Ptr = '}';
-    CurrentJsonArena->Offset += 1;
-    CurrentJsonState = STATE_DIRTY;
+void WebJsonEndObject(web_json_writer WriterPtr) {
+    writer_state *Writer = (writer_state *) WriterPtr;
+    WriteChar(Writer, '}');
+    Writer->State = STATE_DIRTY;
 }
 
-void WebJsonBeginArray(void) {
-    WEB_ASSERT(CurrentJsonArena->Capacity - CurrentJsonArena->Offset >= 1);
-    u8 *Ptr = CurrentJsonArena->Items + CurrentJsonArena->Offset;
-    *Ptr = '[';
-    CurrentJsonArena->Offset += 1;
-    CurrentJsonState = STATE_CLEAN;
+void WebJsonBeginArray(web_json_writer WriterPtr) {
+    writer_state *Writer = (writer_state *) WriterPtr;
+    WriteChar(Writer, '[');
+    Writer->State = STATE_CLEAN;
 }
 
-void WebJsonEndArray(void) {
-    WEB_ASSERT(CurrentJsonArena->Capacity - CurrentJsonArena->Offset >= 1);
-    u8 *Ptr = CurrentJsonArena->Items + CurrentJsonArena->Offset;
-    *Ptr = ']';
-    CurrentJsonArena->Offset += 1;
-    CurrentJsonState = STATE_DIRTY;
+void WebJsonEndArray(web_json_writer WriterPtr) {
+    writer_state *Writer = (writer_state *) WriterPtr;
+    WriteChar(Writer, ']');
+    Writer->State = STATE_DIRTY;
 }
 
-#define CHECK_CAP() do { if (Offset >= CurrentJsonArena->Capacity) { \
-WEB_PANIC("Arena does not have enough capacity"); \
-} } while (0)
-
-static uz JsonPutStringWithEscaping(web_string_view String, sz Offset) {
-    CHECK_CAP();
-
-    CurrentJsonArena->Items[Offset] = '"';
-    ++Offset;
+static void WriteStringLiteral(writer_state *Writer, web_string_view String) {
+    WriteChar(Writer, '"');
 
     for (sz StringIndex = 0; StringIndex < String.Count; ++StringIndex) {
         u8 Char = String.Items[StringIndex];
 
         if (Char == '"') {
-            CHECK_CAP();
-
-            CurrentJsonArena->Items[Offset] = '\\';
-            CurrentJsonArena->Items[Offset + 1] = '"';
-
-            Offset += 2;
-        } else {
-            CHECK_CAP();
-
-            CurrentJsonArena->Items[Offset] = Char;
-            ++Offset;
+            WriteChar(Writer, '\\');
         }
+
+        WriteChar(Writer, Char);
     }
 
-    CHECK_CAP();
-
-    CurrentJsonArena->Items[Offset] = '"';
-    ++Offset;
-
-    return Offset;
+    WriteChar(Writer, '"');
 }
 
 
-void WebJsonPutKey(web_string_view Key) {
-    sz Offset = CurrentJsonArena->Offset;
+void WebJsonPutKey(web_json_writer WriterPtr, web_string_view Key) {
+    writer_state *Writer = (writer_state *) WriterPtr;
 
-    if (CurrentJsonState == STATE_DIRTY) {
-        CHECK_CAP();
-
-        CurrentJsonArena->Items[Offset] = ',';
-        ++Offset;
+    if (Writer->State == STATE_DIRTY) {
+        WriteChar(Writer, ',');
     }
 
-    Offset = JsonPutStringWithEscaping(Key, Offset);
+    WriteStringLiteral(Writer, Key);
 
-    CHECK_CAP();
-
-    CurrentJsonArena->Items[Offset] = ':';
-    ++Offset;
-
-    CurrentJsonArena->Offset = Offset;
+    WriteChar(Writer, ':');
 }
 
-static void WebJsonPutSpecial(web_string_view Special) {
-    sz BytesRequired = Special.Count;
-    WEB_ASSERT(CurrentJsonArena->Capacity - CurrentJsonArena->Offset >= BytesRequired);
-
-    u8 *Ptr = CurrentJsonArena->Items + CurrentJsonArena->Offset;
-    memcpy(Ptr, Special.Items, Special.Count);
-
-    CurrentJsonState = STATE_DIRTY;
-    CurrentJsonArena->Offset += BytesRequired;
+static void WriteSpecial(writer_state *Writer, const char *Special) {
+    WEB_ARRAY_EXTEND(Writer->Arena, &Writer->OutputString, &WEB_SV_LIT(Special));
+    Writer->State = STATE_DIRTY;
 }
 
-void WebJsonPutTrue(void) {
-    WebJsonPutSpecial(WEB_SV_LIT("true"));
+void WebJsonPutTrue(web_json_writer WriterPtr) {
+    WriteSpecial((writer_state *) WriterPtr, "true");
 }
 
-void WebJsonPutFalse(void) {
-    WebJsonPutSpecial(WEB_SV_LIT("false"));
+void WebJsonPutFalse(web_json_writer WriterPtr) {
+    WriteSpecial((writer_state *) WriterPtr, "false");
 }
 
-void WebJsonPutNull(void) {
-    WebJsonPutSpecial(WEB_SV_LIT("null"));
+void WebJsonPutNull(web_json_writer WriterPtr) {
+    WriteSpecial((writer_state *) WriterPtr, "null");
 }
 
-void WebJsonPutNumber(f64 Number) {
+void WebJsonPutNumber(web_json_writer WriterPtr, f64 Number) {
+    writer_state *Writer = (writer_state *) WriterPtr;
     web_arena *TempArena = WebGetTempArena();
 
     web_string_view NumberString;
     f64 Integral;
     f64 Fractional = modf(Number, &Integral);
-    if (Fractional == 0.0 || Fractional == -0.0) {
+    if (fabs(Fractional) == 0.0) {
         NumberString = WebArenaFormat(TempArena, "%lld", (s64)Number);
     } else {
         NumberString = WebArenaFormat(TempArena, "%f", Number);
     }
 
-    sz BytesRequired = NumberString.Count;
-    WEB_ASSERT(CurrentJsonArena->Capacity - CurrentJsonArena->Offset >= BytesRequired);
-
-    u8 *Ptr = CurrentJsonArena->Items + CurrentJsonArena->Offset;
-    memcpy(Ptr, NumberString.Items, NumberString.Count);
-
-    CurrentJsonState = STATE_DIRTY;
-    CurrentJsonArena->Offset += BytesRequired;
+    WEB_ARRAY_EXTEND(Writer->Arena, &Writer->OutputString, &NumberString);
 }
 
-void WebJsonPutString(web_string_view String) {
-    uz MinBytesRequired = String.Count + 2;
-    WEB_ASSERT(WebArenaAvail(CurrentJsonArena) >= MinBytesRequired);
-
-    uz Offset = CurrentJsonArena->Offset;
-
-    Offset = JsonPutStringWithEscaping(String, Offset);
-
-    CurrentJsonState = STATE_DIRTY;
-    CurrentJsonArena->Offset = Offset;
+void WebJsonPutString(web_json_writer WriterPtr, web_string_view String) {
+    writer_state *Writer = (writer_state *) WriterPtr;
+    WriteStringLiteral(Writer, String);
 }
 
-void WebJsonPrepareArrayElement(void) {
-    if (CurrentJsonState == STATE_DIRTY) {
-        const sz BytesRequired = 1;
-
-        WEB_ASSERT(CurrentJsonArena->Capacity - CurrentJsonArena->Offset >= BytesRequired);
-
-        u8 *Ptr = CurrentJsonArena->Items + CurrentJsonArena->Offset;
-        *Ptr = ',';
-        CurrentJsonArena->Offset += BytesRequired;
+void WebJsonPrepareArrayElement(web_json_writer WriterPtr) {
+    writer_state *Writer = (writer_state *) WriterPtr;
+    if (Writer->State == STATE_DIRTY) {
+        WriteChar(Writer, ',');
     }
 }

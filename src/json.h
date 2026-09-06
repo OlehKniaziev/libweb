@@ -22,21 +22,21 @@ typedef struct web_json_value web_json_value;
 
 typedef struct {
     web_json_value *Items;
-    uz Count;
-    uz Capacity;
+    sz Count;
+    sz Capacity;
 } web_json_array;
 
 typedef struct {
     web_string_view *Keys;
     web_json_value *Values;
-    uz Count;
-    uz Capacity;
+    sz Count;
+    sz Capacity;
 } web_json_object;
 
 struct web_json_value {
     web_json_value_type Type;
     union {
-        double Number;
+        f64 Number;
         web_string_view String;
         web_json_array Array;
         web_json_object Object;
@@ -123,26 +123,28 @@ static inline b32 WebJsonObjectGetObject(const web_json_object *Object, web_stri
     return 0;
 }
 
-void WebJsonBegin(web_arena *);
+typedef void* web_json_writer;
 
-void WebJsonBeginObject(void);
-void WebJsonEndObject(void);
+web_json_writer WebJsonBegin(web_arena *);
 
-void WebJsonBeginArray(void);
-void WebJsonEndArray(void);
+void WebJsonBeginObject(web_json_writer);
+void WebJsonEndObject(web_json_writer);
 
-void WebJsonPrepareArrayElement(void);
+void WebJsonBeginArray(web_json_writer);
+void WebJsonEndArray(web_json_writer);
 
-void WebJsonPutNumber(f64);
-void WebJsonPutString(web_string_view);
+void WebJsonPrepareArrayElement(web_json_writer);
 
-void WebJsonPutTrue(void);
-void WebJsonPutFalse(void);
-void WebJsonPutNull(void);
+void WebJsonPutNumber(web_json_writer, f64);
+void WebJsonPutString(web_json_writer, web_string_view);
 
-void WebJsonPutKey(web_string_view);
+void WebJsonPutTrue(web_json_writer);
+void WebJsonPutFalse(web_json_writer);
+void WebJsonPutNull(web_json_writer);
 
-web_string_view WebJsonEnd(void);
+void WebJsonPutKey(web_json_writer, web_string_view);
+
+web_string_view WebJsonEnd(web_json_writer);
 
 #ifdef __cplusplus
 }

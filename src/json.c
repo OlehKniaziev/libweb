@@ -2,23 +2,25 @@
 
 #include "json.h"
 
-typedef struct {
-    enum {
-        TOKEN_LBRACKET,
-        TOKEN_RBRACKET,
-        TOKEN_LBRACE,
-        TOKEN_RBRACE,
-        TOKEN_STRING,
-        TOKEN_NUMBER,
-        TOKEN_NULL,
-        TOKEN_TRUE,
-        TOKEN_FALSE,
-        TOKEN_COLON,
-        TOKEN_COMMA,
+typedef enum {
+    TOKEN_LBRACKET,
+    TOKEN_RBRACKET,
+    TOKEN_LBRACE,
+    TOKEN_RBRACE,
+    TOKEN_STRING,
+    TOKEN_NUMBER,
+    TOKEN_NULL,
+    TOKEN_TRUE,
+    TOKEN_FALSE,
+    TOKEN_COLON,
+    TOKEN_COMMA,
 
-        TOKEN_ILLEGAL,
-        TOKEN_UNCLOSED_STRING,
-    } Type;
+    TOKEN_ILLEGAL,
+    TOKEN_UNCLOSED_STRING,
+} json_token_type;
+
+typedef struct {
+    json_token_type Type;
     web_string_view Value;
 } json_token;
 
@@ -113,6 +115,14 @@ static b32 JsonNextToken(web_arena *Arena, web_string_view Input, sz *Position, 
                 Char = Input.Items[CurrentPosition];
 
                 switch (Char) {
+                case '"': {
+                    WEB_ARRAY_PUSH(Arena, &String, '"');
+                    break;
+                }
+                case '\\': {
+                    WEB_ARRAY_PUSH(Arena, &String, '\\');
+                    break;
+                }
                 case 'n': {
                     WEB_ARRAY_PUSH(Arena, &String, '\n');
                     break;
@@ -121,12 +131,16 @@ static b32 JsonNextToken(web_arena *Arena, web_string_view Input, sz *Position, 
                     WEB_ARRAY_PUSH(Arena, &String, '\r');
                     break;
                 }
-                case '"': {
-                    WEB_ARRAY_PUSH(Arena, &String, '"');
+                case 'b': {
+                    WEB_ARRAY_PUSH(Arena, &String, '\b');
                     break;
                 }
-                case '\\': {
-                    WEB_ARRAY_PUSH(Arena, &String, '\\');
+                case 't': {
+                    WEB_ARRAY_PUSH(Arena, &String, '\t');
+                    break;
+                }
+                case 'f': {
+                    WEB_ARRAY_PUSH(Arena, &String, '\f');
                     break;
                 }
                 default: WEB_TODO();
@@ -163,17 +177,7 @@ static b32 JsonNextToken(web_arena *Arena, web_string_view Input, sz *Position, 
         } else if (WebStringViewEqualCStr(Value, "null")) {
             OutToken->Type = TOKEN_NULL;
         } else {
-            int TokenType = TOKEN_NUMBER;
-
-            for (sz I = 0; I < Value.Count; ++I) {
-                u8 Char = Value.Items[I];
-                if (Char < '0' || Char > '9') {
-                    TokenType = TOKEN_ILLEGAL;
-                    break;
-                }
-            }
-
-            OutToken->Type = TokenType;
+            OutToken->Type = TOKEN_NUMBER;
         }
 
         *Position = CurrentPosition;
@@ -192,30 +196,13 @@ static b32 JsonPeekToken(web_string_view Input, sz *Position, json_token *OutTok
     return Result;
 }
 
-static f64 ParseF64(web_string_view Buffer) {
-    WEB_ASSERT(Buffer.Count != 0);
+static b32 ParseF64(web_string_view Buffer, f64 *Out) {
+    web_arena *Temp = WebGetTempArena();
+    const char *NumberCStr = WebStringViewCloneCStr(Temp, Buffer);
 
-    u64 Mult = 1;
-    u64 Result = 0;
-    for (sz I = Buffer.Count - 1; I >= 0; --I) {
-        u8 Char = Buffer.Items[I];
-        // TODO(oleh): Provide a way to signal error to the caller.
-        if (Char < '0' || Char > '9') WEB_PANIC("Bad input to 'ParseF64'");
-        Result += Mult * (Char - '0');
-        Mult *= 10;
-    }
-
-    if (Buffer.Items[0] == '-') {
-        return (f64)-(s64)Result;
-    } else if (Buffer.Items[0] == '+') {
-        return (f64)Result;
-    } else if (Buffer.Count == 1) {
-        u8 Char = Buffer.Items[0];
-        WEB_ASSERT(Char >= '0' && Char <= '9');
-        return (f64)(Char - '0');
-    }
-
-    return (f64)Result;
+    char *EndPtr;
+    *Out = strtod(NumberCStr, &EndPtr);
+    return !(*Out == 0.0 && NumberCStr == EndPtr);
 }
 
 #define DEFAULT_OBJECT_CAPACITY 37
@@ -227,7 +214,12 @@ static b32 JsonParseValue(web_arena *Arena, web_string_view Input, sz *Position,
 
     switch (Token.Type) {
     case TOKEN_NUMBER: {
-        f64 NumberValue = ParseF64(Token.Value);
+        f64 NumberValue;
+
+        if (!ParseF64(Token.Value, &NumberValue)) {
+            return 0;
+        }
+
         OutValue->Type = JSON_NUMBER;
         OutValue->Number = NumberValue;
         return 1;
@@ -468,11 +460,24 @@ static void WriteStringLiteral(writer_state *Writer, web_string_view String) {
     for (sz StringIndex = 0; StringIndex < String.Count; ++StringIndex) {
         u8 Char = String.Items[StringIndex];
 
-        if (Char == '"') {
-            WriteChar(Writer, '\\');
+        u8 ToWrite = Char;
+
+#define ESCAPE(c) WriteChar(Writer, '\\'); ToWrite = (c); break;
+
+        switch (Char) {
+            case '"':  ESCAPE('"');
+            case '\\': ESCAPE('\\');
+            case '\b': ESCAPE('b');
+            case '\f': ESCAPE('f');
+            case '\n': ESCAPE('n');
+            case '\r': ESCAPE('r');
+            case '\t': ESCAPE('t');
+            default:   break;
         }
 
-        WriteChar(Writer, Char);
+#undef ESCAPE
+
+        WriteChar(Writer, ToWrite);
     }
 
     WriteChar(Writer, '"');

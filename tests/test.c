@@ -30,26 +30,46 @@ void TestBase64(void) {
 }
 
 void TestJsonEncoding_StringEscaping(web_arena *Arena) {
-    WebJsonBegin(Arena);
-    WebJsonBeginObject();
+    web_json_writer Writer = WebJsonBegin(Arena);
+    WebJsonBeginObject(Writer);
 
-    WebJsonPutKey(WEB_SV_LIT("hello\""));
-    WebJsonPutString(WEB_SV_LIT("\"world\""));
+    WebJsonPutKey(Writer, WEB_SV_LIT("\r\nhello\""));
+    WebJsonPutString(Writer, WEB_SV_LIT("\"\b\t\f\\world\""));
 
-    WebJsonEndObject();
-    web_string_view Json = WebJsonEnd();
+    WebJsonEndObject(Writer);
+    web_string_view Json = WebJsonEnd(Writer);
 
-    SV_EQUAL(Json, WEB_SV_LIT("{\"hello\\\"\":\"\\\"world\\\"\"}"));
+    SV_EQUAL(Json, WEB_SV_LIT("{\"\\r\\nhello\\\"\":\"\\\"\\b\\t\\f\\\\world\\\"\"}"));
+}
+
+void TestJsonDecoding_Escaping(web_arena *Arena) {
+    web_string_view Input = WEB_SV_LIT("\"\\\"v\\ra\\nl\\tu\\be\\f\\\\\\\"\"");
+    web_json_value Value = {};
+
+    WEB_VERIFY(WebJsonParse(Arena, Input, &Value));
+    WEB_VERIFY(Value.Type == JSON_STRING);
+
+    web_string_view S = Value.String;
+
+    SV_EQUAL(S, WEB_SV_LIT("\"v\ra\nl\tu\be\f\\\""));
 }
 
 void TestJsonEncoding(void) {
     web_arena Arena;
-    WebArenaInit(&Arena, 2048);
+    WebArenaInit(&Arena, 676767);
 
     TestJsonEncoding_StringEscaping(&Arena);
+}
+
+void TestJsonDecoding(void) {
+    web_arena Arena;
+    WebArenaInit(&Arena, 676767);
+
+    TestJsonDecoding_Escaping(&Arena);
 }
 
 int main() {
     TestBase64();
     TestJsonEncoding();
+    TestJsonDecoding();
 }

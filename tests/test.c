@@ -30,7 +30,7 @@ void TestBase64(void) {
 }
 
 void TestJsonEncoding_StringEscaping(web_arena *Arena) {
-    web_json_writer Writer = WebJsonBegin(Arena);
+    web_json_writer Writer = WebJsonBegin(Arena, 0);
     WebJsonBeginObject(Writer);
 
     WebJsonPutKey(Writer, WEB_SV_LIT("\r\nhello\""));

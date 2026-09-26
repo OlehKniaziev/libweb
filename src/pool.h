@@ -1,5 +1,5 @@
-#ifndef POOL_H_
-#define POOL_H_
+#ifndef WEB_POOL_H_
+#define WEB_POOL_H_
 
 #include "threadpool.h"
 
@@ -22,4 +22,4 @@ void *WebSyncPoolAlloc(web_sync_pool *Pool);
 
 void WebSyncPoolFree(web_sync_pool *Pool, void *Item);
 
-#endif // POOL_H_
+#endif // WEB_POOL_H_

@@ -1,5 +1,5 @@
-#ifndef HTTP_H_
-#define HTTP_H_
+#ifndef WEB_HTTP_H_
+#define WEB_HTTP_H_
 
 #include "common.h"
 #include "json.h"
@@ -196,4 +196,4 @@ void WebHttpContextAddHeader(web_http_response_context *Ctx, web_string_view Nam
     }
 #endif
 
-#endif // HTTP_H_
+#endif // WEB_HTTP_H_

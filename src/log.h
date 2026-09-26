@@ -1,5 +1,5 @@
-#ifndef LOG_H_
-#define LOG_H_
+#ifndef WEB_LOG_H_
+#define WEB_LOG_H_
 
 #include "common.h"
 
@@ -67,4 +67,4 @@ void WebLogSetIncludeSource(b32);
 }
 #endif // __cplusplus
 
-#endif // LOG_H_
+#endif // WEB_LOG_H_

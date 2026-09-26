@@ -1,5 +1,5 @@
-#ifndef THREADPOOL_H_
-#define THREADPOOL_H_
+#ifndef WEB_THREADPOOL_H_
+#define WEB_THREADPOOL_H_
 
 #include "common.h"
 
@@ -60,4 +60,4 @@ b32 WebThreadPoolInit(web_thread_pool *, web_arena *, web_thread_pool_config *);
 
 void WebThreadPoolScheduleTask(web_thread_pool *, web_thread_pool_task *);
 
-#endif // THREADPOOL_H_
+#endif // WEB_THREADPOOL_H_

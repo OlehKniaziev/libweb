@@ -1,5 +1,5 @@
-#ifndef BASE64_H_
-#define BASE64_H_
+#ifndef WEB_BASE64_H_
+#define WEB_BASE64_H_
 
 #include "common.h"
 
@@ -14,4 +14,4 @@ void WebBase64Encode(web_string_view InputBuffer, u8 *OutputBuffer, uz *OutputBu
 }
 #endif
 
-#endif // BASE64_H_
+#endif // WEB_BASE64_H_

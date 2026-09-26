@@ -1,5 +1,5 @@
-#ifndef HTTPS_H_
-#define HTTPS_H_
+#ifndef WEB_HTTPS_H_
+#define WEB_HTTPS_H_
 
 #include "common.h"
 
@@ -71,4 +71,4 @@ typedef struct {
     }
 #endif // __cplusplus
 
-#endif // HTTPS_H_
+#endif // WEB_HTTPS_H_

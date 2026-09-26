@@ -1,5 +1,5 @@
-#ifndef COMMON_H_
-#define COMMON_H_
+#ifndef WEB_COMMON_H_
+#define WEB_COMMON_H_
 
 #include <stdint.h>
 #include <stdio.h>
@@ -258,4 +258,4 @@ b32 WebParseS64(web_string_view, s64 *);
 }
 #endif
 
-#endif // COMMON_H_
+#endif // WEB_COMMON_H_

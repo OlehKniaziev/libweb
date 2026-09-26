@@ -1,5 +1,5 @@
-#ifndef JSON_H_
-#define JSON_H_
+#ifndef WEB_JSON_H_
+#define WEB_JSON_H_
 
 #include "common.h"
 
@@ -42,6 +42,10 @@ struct web_json_value {
         web_json_object Object;
     };
 };
+
+typedef enum {
+    WEB_JSON_ESCAPE_UNICODE = 1 << 0,
+} web_json_flags;
 
 b32 WebJsonParse(web_arena *Arena, web_string_view Input, web_json_value *OutValue);
 
@@ -125,7 +129,7 @@ static inline b32 WebJsonObjectGetObject(const web_json_object *Object, web_stri
 
 typedef void* web_json_writer;
 
-web_json_writer WebJsonBegin(web_arena *);
+web_json_writer WebJsonBegin(web_arena *Arena, web_json_flags Flags);
 
 void WebJsonBeginObject(web_json_writer);
 void WebJsonEndObject(web_json_writer);

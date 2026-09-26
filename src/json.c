@@ -1,6 +1,7 @@
 #include <math.h>
 
 #include "json.h"
+#include "utf.h"
 
 typedef enum {
     TOKEN_LBRACKET,
@@ -123,6 +124,10 @@ static b32 JsonNextToken(web_arena *Arena, web_string_view Input, sz *Position, 
                     WEB_ARRAY_PUSH(Arena, &String, '\\');
                     break;
                 }
+                case '/': {
+                    WEB_ARRAY_PUSH(Arena, &String, '/');
+                    break;
+                }
                 case 'n': {
                     WEB_ARRAY_PUSH(Arena, &String, '\n');
                     break;
@@ -141,6 +146,32 @@ static b32 JsonNextToken(web_arena *Arena, web_string_view Input, sz *Position, 
                 }
                 case 'f': {
                     WEB_ARRAY_PUSH(Arena, &String, '\f');
+                    break;
+                }
+                case 'u': {
+                    web_code_point CodePoint = 0;
+                    s32 N = sscanf((char *)Input.Items + CurrentPosition, "%4x", &CodePoint);
+                    if (N != 4) {
+                        return 0;
+                    }
+
+                    u8 EncodeBuf[4];
+                    sz NumWritten = 0;
+
+                    b32 Ok = WebUTF8Encode(
+                            &CodePoint,
+                            1,
+                            EncodeBuf,
+                            sizeof(EncodeBuf)/sizeof(*EncodeBuf),
+                            &NumWritten
+                    );
+                    WEB_ASSERT(Ok);
+
+                    for (sz ByteIdx = 0; ByteIdx < NumWritten; ++ByteIdx) {
+                        u8 Byte = EncodeBuf[ByteIdx];
+                        WEB_ARRAY_PUSH(Arena, &String, Byte);
+                    }
+
                     break;
                 }
                 default: WEB_TODO();
@@ -409,6 +440,7 @@ typedef enum {
 typedef struct {
     web_arena *Arena;
     json_state State;
+    web_json_flags Flags;
     web_dynamic_string OutputString;
 } writer_state;
 
@@ -416,10 +448,55 @@ static void WriteChar(writer_state *Writer, u8 Char) {
     WEB_ARRAY_PUSH(Writer->Arena, &Writer->OutputString, Char);
 }
 
-web_json_writer WebJsonBegin(web_arena *Arena) {
+static void WriteCharWithEscaping(writer_state *Writer, u8 Char) {
+#define ESCAPE(c) WriteChar(Writer, '\\'); ToWrite = (c); break;
+    u8 ToWrite = Char;
+
+    switch (Char) {
+        case '"':  ESCAPE('"');
+        case '\\': ESCAPE('\\');
+        case '\b': ESCAPE('b');
+        case '\f': ESCAPE('f');
+        case '\n': ESCAPE('n');
+        case '\r': ESCAPE('r');
+        case '\t': ESCAPE('t');
+        default:   break;
+    }
+
+#undef ESCAPE
+
+    WriteChar(Writer, ToWrite);
+}
+
+static b32 WriteCodePoint(writer_state *Writer, web_code_point CodePoint) {
+    if (CodePoint <= WEB_CODE_POINT_ASCII_MAX) {
+        WriteCharWithEscaping(Writer, (u8)CodePoint);
+        return 1;
+    }
+
+    if (CodePoint > 0xFFFF) {
+        return 0;
+    }
+
+    WriteChar(Writer, '\\');
+    WriteChar(Writer, 'u');
+
+    char HexBuf[5] = {0};
+
+    sprintf(HexBuf, "%4x", (int)CodePoint);
+
+    for (s32 CharIdx = 0; CharIdx < 4; ++CharIdx) {
+        WriteChar(Writer, HexBuf[CharIdx]);
+    }
+
+    return 1;
+}
+
+web_json_writer WebJsonBegin(web_arena *Arena, web_json_flags Flags) {
     writer_state *Writer = WEB_ARENA_NEW(Arena, writer_state);
     Writer->Arena = Arena;
     Writer->State = STATE_CLEAN;
+    Writer->Flags = Flags;
     WEB_ARRAY_INIT(Writer->Arena, &Writer->OutputString);
     return (web_json_writer) Writer;
 }
@@ -457,27 +534,32 @@ void WebJsonEndArray(web_json_writer WriterPtr) {
 static void WriteStringLiteral(writer_state *Writer, web_string_view String) {
     WriteChar(Writer, '"');
 
-    for (sz StringIndex = 0; StringIndex < String.Count; ++StringIndex) {
-        u8 Char = String.Items[StringIndex];
+    if (Writer->Flags & WEB_JSON_ESCAPE_UNICODE) {
+        web_utf8_stream Stream = {.View = String};
 
-        u8 ToWrite = Char;
+        web_code_point CodePoint = 0;
 
-#define ESCAPE(c) WriteChar(Writer, '\\'); ToWrite = (c); break;
+        sz PrevPos = 0;
 
-        switch (Char) {
-            case '"':  ESCAPE('"');
-            case '\\': ESCAPE('\\');
-            case '\b': ESCAPE('b');
-            case '\f': ESCAPE('f');
-            case '\n': ESCAPE('n');
-            case '\r': ESCAPE('r');
-            case '\t': ESCAPE('t');
-            default:   break;
+        while (WebUTF8StreamNext(&Stream, &CodePoint)) {
+            if (!WriteCodePoint(Writer, CodePoint)) {
+                sz RawBytesCount = Stream.Pos - PrevPos;
+
+                for (sz ByteOffset = 0; ByteOffset < RawBytesCount; ++ByteOffset) {
+                    u8 Byte = String.Items[PrevPos + ByteOffset];
+                    WriteChar(Writer, Byte);
+                }
+            }
+
+            PrevPos = Stream.Pos;
         }
 
-#undef ESCAPE
-
-        WriteChar(Writer, ToWrite);
+        if (Stream.Error) WEB_TODO();
+    } else {
+        for (sz CharIdx = 0; CharIdx < String.Count; ++CharIdx) {
+            u8 Char = String.Items[CharIdx];
+            WriteCharWithEscaping(Writer, Char);
+        }
     }
 
     WriteChar(Writer, '"');

@@ -49,6 +49,8 @@ static b32 JsonNextToken(web_arena *Arena, web_string_view Input, sz *Position, 
 
     if (CurrentPosition >= Input.Count) return 0;
 
+    *Position = CurrentPosition;
+
     u8 CurrentChar = Input.Items[CurrentPosition];
 
     switch (CurrentChar) {

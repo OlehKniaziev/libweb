@@ -1,9 +1,14 @@
 #include "../src/base64.h"
 #include "../src/json.h"
+#include "../src/utf.h"
 
 #define SV_EQUAL(Lhs, Rhs) do { \
 if (!WebStringViewEqual((Lhs), (Rhs))) WEB_PANIC_FMT("Assertion failed: '" WEB_SV_FMT "' != '" WEB_SV_FMT "'", WEB_SV_ARG((Lhs)), WEB_SV_ARG((Rhs))); \
     } while (0)
+
+#define INT_EQUAL(Lhs, Rhs) do { \
+    if ((Lhs) != (Rhs)) WEB_PANIC_FMT("Assertion failed: 0x%04x != 0x%04x", (Lhs), (Rhs)); \
+} while (0)
 
 void TestBase64(void) {
     web_string_view Input = WEB_SV_LIT("Many hands make light work.");
@@ -29,6 +34,46 @@ void TestBase64(void) {
     SV_EQUAL(Decoded, Input);
 }
 
+#define CODE_POINT_A 0x0430
+#define CODE_POINT_B 0x0431
+
+void TestUTF8Decoding(void) {
+    web_utf8_stream Stream = {
+        .View = WEB_SV_LIT("аб"),
+    };
+
+    web_code_point PointA = 0;
+    WEB_VERIFY(WebUTF8StreamNext(&Stream, &PointA));
+    INT_EQUAL(PointA, CODE_POINT_A);
+
+    web_code_point PointB = 0;
+    WEB_VERIFY(WebUTF8StreamNext(&Stream, &PointB));
+    INT_EQUAL(PointB, CODE_POINT_B);
+
+    WEB_VERIFY(!WebUTF8StreamNext(&Stream, NULL));
+}
+
+void TestUTF8Encoding(void) {
+    web_code_point CodePoints[] = {
+        CODE_POINT_A,
+        CODE_POINT_B,
+    };
+    sz CodePointsCount = sizeof(CodePoints)/sizeof(*CodePoints);
+
+    u8 Output[4] = {0};
+    sz OutputCount = sizeof(Output)/sizeof(*Output);
+
+    sz NumWritten = 0;
+
+    WEB_VERIFY(WebUTF8Encode(CodePoints, CodePointsCount, Output, OutputCount, &NumWritten));
+
+    INT_EQUAL((s32)NumWritten, 4);
+    INT_EQUAL(Output[0], 0xC0 | (CODE_POINT_A >> 6));
+    INT_EQUAL(Output[1], 0x10 | (CODE_POINT_A & 0x3F));
+    INT_EQUAL(Output[2], 0xC0 | (CODE_POINT_B >> 6));
+    INT_EQUAL(Output[3], 0x10 | (CODE_POINT_B & 0x3F));
+}
+
 void TestJsonEncoding_StringEscaping(web_arena *Arena) {
     web_json_writer Writer = WebJsonBegin(Arena, 0);
     WebJsonBeginObject(Writer);
@@ -40,6 +85,12 @@ void TestJsonEncoding_StringEscaping(web_arena *Arena) {
     web_string_view Json = WebJsonEnd(Writer);
 
     SV_EQUAL(Json, WEB_SV_LIT("{\"\\r\\nhello\\\"\":\"\\\"\\b\\t\\f\\\\world\\\"\"}"));
+}
+
+void TestJsonEncoding_Unicode(web_arena *Arena) {
+    web_json_writer Writer = WebJsonBegin(Arena, WEB_JSON_ESCAPE_UNICODE);
+    WebJsonPutString(Writer, WEB_SV_LIT("аб"));
+    SV_EQUAL(WebJsonEnd(Writer), WEB_SV_LIT("\"\\u0430\\u0431\""));
 }
 
 void TestJsonDecoding_Escaping(web_arena *Arena) {
@@ -59,6 +110,7 @@ void TestJsonEncoding(void) {
     WebArenaInit(&Arena, 676767);
 
     TestJsonEncoding_StringEscaping(&Arena);
+    TestJsonEncoding_Unicode(&Arena);
 }
 
 void TestJsonDecoding(void) {
@@ -68,8 +120,14 @@ void TestJsonDecoding(void) {
     TestJsonDecoding_Escaping(&Arena);
 }
 
+void TestUTF(void) {
+    TestUTF8Decoding();
+    TestUTF8Decoding();
+}
+
 int main() {
     TestBase64();
     TestJsonEncoding();
     TestJsonDecoding();
+    TestUTF();
 }

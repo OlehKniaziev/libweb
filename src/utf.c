@@ -36,8 +36,8 @@ b32 WebUTF8StreamNext(web_utf8_stream *Stream, web_code_point *OutCodePoint) {
             return 1;
         }
 
-        *OutCodePoint = (web_code_point)(FirstByte & 0x1F)
-            | (web_code_point)(SecondByte & 0x3F) << 5;
+        *OutCodePoint = (web_code_point)(FirstByte & 0x1F) << 6
+            | (web_code_point)(SecondByte & 0x3F);
         return 1;
     }
 
@@ -55,9 +55,9 @@ b32 WebUTF8StreamNext(web_utf8_stream *Stream, web_code_point *OutCodePoint) {
             return 1;
         }
 
-        *OutCodePoint = (web_code_point)(FirstByte & 0x0F)
-            | (web_code_point)(SecondByte & 0x3F) << 4
-            | (web_code_point)(ThirdByte  & 0x3F) << 10;
+        *OutCodePoint = (web_code_point)(FirstByte & 0x0F) << 12
+            | (web_code_point)(SecondByte & 0x3F) << 6
+            | (web_code_point)(ThirdByte  & 0x3F);
         return 1;
     }
 
@@ -77,10 +77,10 @@ b32 WebUTF8StreamNext(web_utf8_stream *Stream, web_code_point *OutCodePoint) {
             return 1;
         }
 
-        *OutCodePoint = (web_code_point)(FirstByte & 0x07)
-            | (web_code_point)(SecondByte & 0x3F) << 3
-            | (web_code_point)(ThirdByte  & 0x3F) << 9
-            | (web_code_point)(FourthByte & 0x3F) << 15;
+        *OutCodePoint = (web_code_point)(FirstByte & 0x07) << 18
+            | (web_code_point)(SecondByte & 0x3F) << 12
+            | (web_code_point)(ThirdByte  & 0x3F) << 6
+            | (web_code_point)(FourthByte & 0x3F);
         return 1;
     }
 
@@ -119,16 +119,16 @@ b32 WebUTF8Encode(
                 goto End;
             }
 
-            Output[OutputCursor++] = (u8)((CodePoint & 0x1F) | UTF8_2_MASK);
-            Output[OutputCursor++] = (u8)(((CodePoint >> 5) & 0x3F) | 0x10 << 6);
+            Output[OutputCursor++] = (u8)(((CodePoint >> 0) & 0x3F) | 0x10 << 6);
+            Output[OutputCursor++] = (u8)(((CodePoint >> 6) & 0x1F) | UTF8_2_MASK);
         } else if (CodePoint <= 0xFFFF) {
             if (OutputCursor + 2 >= OutputCount) {
                 goto End;
             }
 
-            Output[OutputCursor++] = (u8)((CodePoint & 0x0F) | UTF8_3_MASK);
-            Output[OutputCursor++] = (u8)(((CodePoint >> 4 ) & 0x3F) | 0x10 << 6);
-            Output[OutputCursor++] = (u8)(((CodePoint >> 10) & 0x3F) | 0x10 << 6);
+            Output[OutputCursor++] = (u8)(((CodePoint >> 0)  & 0x3F) | 0x10 << 6);
+            Output[OutputCursor++] = (u8)(((CodePoint >> 6)  & 0x3F) | 0x10 << 6);
+            Output[OutputCursor++] = (u8)(((CodePoint >> 12) & 0x0F) | UTF8_3_MASK);
         } else {
             if (CodePoint > WEB_CODE_POINT_MAX) {
                 goto End;
@@ -138,10 +138,10 @@ b32 WebUTF8Encode(
                 goto End;
             }
 
-            Output[OutputCursor++] = (u8)((CodePoint & 0x07) | UTF8_4_MASK);
-            Output[OutputCursor++] = (u8)(((CodePoint >> 4 ) & 0x3F) | 0x10 << 6);
-            Output[OutputCursor++] = (u8)(((CodePoint >> 10) & 0x3F) | 0x10 << 6);
-            Output[OutputCursor++] = (u8)(((CodePoint >> 16) & 0x3F) | 0x10 << 6);
+            Output[OutputCursor++] = (u8)(((CodePoint >> 0)  & 0x3F) | 0x10 << 6);
+            Output[OutputCursor++] = (u8)(((CodePoint >> 6)  & 0x3F) | 0x10 << 6);
+            Output[OutputCursor++] = (u8)(((CodePoint >> 12) & 0x3F) | 0x10 << 6);
+            Output[OutputCursor++] = (u8)(((CodePoint >> 18) & 0x07) | UTF8_4_MASK);
         }
     }
 

@@ -483,7 +483,7 @@ static b32 WriteCodePoint(writer_state *Writer, web_code_point CodePoint) {
 
     char HexBuf[5] = {0};
 
-    sprintf(HexBuf, "%4x", (int)CodePoint);
+    sprintf(HexBuf, "%04x", (int)CodePoint);
 
     for (s32 CharIdx = 0; CharIdx < 4; ++CharIdx) {
         WriteChar(Writer, HexBuf[CharIdx]);

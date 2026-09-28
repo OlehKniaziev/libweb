@@ -295,6 +295,8 @@ static b32 JsonParseValue(web_arena *Arena, web_string_view Input, sz *Position,
             if (!JsonNextToken(Arena, Input, Position, &Token)) return 0;
             if (Token.Type == TOKEN_RBRACKET) break;
             if (Token.Type == TOKEN_COMMA) goto ParseElement;
+
+            return 0;
         }
 
         OutValue->Type = JSON_ARRAY;

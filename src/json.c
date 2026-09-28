@@ -343,15 +343,11 @@ static b32 JsonParseValue(web_arena *Arena, web_string_view Input, sz *Position,
 
             while (1) {
                 web_string_view CurrentKey = Object.Keys[ObjectIndex];
-                if (CurrentKey.Items == NULL) {
+                if (CurrentKey.Items == NULL || WebStringViewEqual(CurrentKey, KeyToInsert)) {
                     Object.Keys[ObjectIndex] = KeyToInsert;
                     Object.Values[ObjectIndex] = ValueToInsert;
                     ++Object.Count;
                     break;
-                }
-
-                if (WebStringViewEqual(CurrentKey, KeyToInsert)) {
-                    WEB_PANIC_FMT("Tried to insert a duplicate key '" WEB_SV_FMT "' into an object", WEB_SV_ARG(KeyToInsert));
                 }
 
                 ++ObjectIndex;

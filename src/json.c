@@ -157,7 +157,7 @@ static b32 JsonNextToken(web_arena *Arena, web_string_view Input, sz *Position, 
 
                     CurrentPosition += 4;
 
-                    u8 EncodeBuf[2] = {0};
+                    u8 EncodeBuf[4] = {0};
                     sz EncodeBufCount = sizeof(EncodeBuf)/sizeof(*EncodeBuf);
                     sz NumWritten = 0;
 
@@ -169,7 +169,6 @@ static b32 JsonNextToken(web_arena *Arena, web_string_view Input, sz *Position, 
                             &NumWritten
                     );
                     WEB_ASSERT(Ok);
-                    WEB_ASSERT(NumWritten == EncodeBufCount);
 
                     for (sz ByteIdx = 0; ByteIdx < NumWritten; ++ByteIdx) {
                         u8 Byte = EncodeBuf[ByteIdx];
@@ -178,7 +177,7 @@ static b32 JsonNextToken(web_arena *Arena, web_string_view Input, sz *Position, 
 
                     break;
                 }
-                default: WEB_TODO();
+                default: return 0;
                 }
             } else {
                 WEB_ARRAY_PUSH(Arena, &String, Char);

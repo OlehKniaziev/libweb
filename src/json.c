@@ -150,22 +150,26 @@ static b32 JsonNextToken(web_arena *Arena, web_string_view Input, sz *Position, 
                 }
                 case 'u': {
                     web_code_point CodePoint = 0;
-                    s32 N = sscanf((char *)Input.Items + CurrentPosition, "%4x", &CodePoint);
-                    if (N != 4) {
+                    s32 N = sscanf((const char *)Input.Items + CurrentPosition + 1, "%4x", &CodePoint);
+                    if (N != 1) {
                         return 0;
                     }
 
-                    u8 EncodeBuf[4];
+                    CurrentPosition += 4;
+
+                    u8 EncodeBuf[2] = {0};
+                    sz EncodeBufCount = sizeof(EncodeBuf)/sizeof(*EncodeBuf);
                     sz NumWritten = 0;
 
                     b32 Ok = WebUTF8Encode(
                             &CodePoint,
                             1,
                             EncodeBuf,
-                            sizeof(EncodeBuf)/sizeof(*EncodeBuf),
+                            EncodeBufCount,
                             &NumWritten
                     );
                     WEB_ASSERT(Ok);
+                    WEB_ASSERT(NumWritten == EncodeBufCount);
 
                     for (sz ByteIdx = 0; ByteIdx < NumWritten; ++ByteIdx) {
                         u8 Byte = EncodeBuf[ByteIdx];

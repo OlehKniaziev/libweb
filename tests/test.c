@@ -69,9 +69,23 @@ void TestUTF8Encoding(void) {
 
     INT_EQUAL((s32)NumWritten, 4);
     INT_EQUAL(Output[0], 0xC0 | (CODE_POINT_A >> 6));
-    INT_EQUAL(Output[1], 0x10 | (CODE_POINT_A & 0x3F));
+    INT_EQUAL(Output[1], 0x80 | (CODE_POINT_A & 0x3F));
     INT_EQUAL(Output[2], 0xC0 | (CODE_POINT_B >> 6));
-    INT_EQUAL(Output[3], 0x10 | (CODE_POINT_B & 0x3F));
+    INT_EQUAL(Output[3], 0x80 | (CODE_POINT_B & 0x3F));
+
+    web_string_view Input = {.Items = Output, .Count = OutputCount};
+
+    web_utf8_stream Stream = {.View = Input};
+
+    web_code_point PointA = 0;
+    WEB_VERIFY(WebUTF8StreamNext(&Stream, &PointA));
+    INT_EQUAL(PointA, CODE_POINT_A);
+
+    web_code_point PointB = 0;
+    WEB_VERIFY(WebUTF8StreamNext(&Stream, &PointB));
+    INT_EQUAL(PointB, CODE_POINT_B);
+
+    WEB_VERIFY(!WebUTF8StreamNext(&Stream, NULL));
 }
 
 void TestJsonEncoding_StringEscaping(web_arena *Arena) {
@@ -105,6 +119,18 @@ void TestJsonDecoding_Escaping(web_arena *Arena) {
     SV_EQUAL(S, WEB_SV_LIT("\"v\ra\nl\tu\be\f\\\""));
 }
 
+void TestJsonDecoding_Unicode(web_arena *Arena) {
+    web_string_view Input = WEB_SV_LIT("\"\\u0430\\u0431\"");
+    web_json_value Value = {};
+
+    WEB_VERIFY(WebJsonParse(Arena, Input, &Value));
+    WEB_VERIFY(Value.Type == JSON_STRING);
+
+    web_string_view S = Value.String;
+
+    SV_EQUAL(S, WEB_SV_LIT("аб"));
+}
+
 void TestJsonEncoding(void) {
     web_arena Arena;
     WebArenaInit(&Arena, 676767);
@@ -118,16 +144,17 @@ void TestJsonDecoding(void) {
     WebArenaInit(&Arena, 676767);
 
     TestJsonDecoding_Escaping(&Arena);
+    TestJsonDecoding_Unicode(&Arena);
 }
 
 void TestUTF(void) {
     TestUTF8Decoding();
-    TestUTF8Decoding();
+    TestUTF8Encoding();
 }
 
 int main() {
+    TestUTF();
     TestBase64();
     TestJsonEncoding();
     TestJsonDecoding();
-    TestUTF();
 }

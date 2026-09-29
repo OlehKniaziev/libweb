@@ -31,9 +31,9 @@ void WebLog(web_log_level Level,
     sz MessageCount = vsnprintf(NULL, 0, Fmt, Args);
     va_end(Args);
 
-    web_arena *Temp = WebGetTempArena();
+    web_temp Temp = WebGetTempArena();
 
-    char *Message = WebArenaPush(Temp, MessageCount + 1);
+    char *Message = WebArenaPush(&Temp.Arena, MessageCount + 1);
 
     va_start(Args, Fmt);
     vsnprintf(Message, MessageCount + 1, Fmt, Args);
@@ -54,6 +54,8 @@ void WebLog(web_log_level Level,
     } else {
         fprintf(LogDestination, "[%s][%s] %s\n", LevelStr, ScopeStr, Message);
     }
+
+    WebReturnTempArena(Temp);
 }
 
 void WebLogSetLevel(web_log_level Level) {

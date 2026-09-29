@@ -6,15 +6,28 @@
 static __thread web_arena TempArena;
 
 #define TEMP_ARENA_CAPACITY (4l * 1024l * 1024l)
+#define TEMP_ARENA_CHUNK_CAPACITY (TEMP_ARENA_CAPACITY / 32l)
 
-web_arena *WebGetTempArena(void) {
+web_temp WebGetTempArena(void) {
     if (TempArena.Items == NULL) {
         WebArenaInit(&TempArena, TEMP_ARENA_CAPACITY);
-    } else {
-        WebArenaReset(&TempArena);
     }
 
-    return &TempArena;
+    web_arena Arena = {
+        .Items = TempArena.Items + TempArena.Offset,
+        .Capacity = TEMP_ARENA_CHUNK_CAPACITY,
+    };
+
+    TempArena.Offset += Arena.Capacity;
+
+    WEB_VERIFY(TempArena.Offset <= TempArena.Capacity);
+
+    return (web_temp){.Arena = Arena};
+}
+
+void WebReturnTempArena(web_temp Temp) {
+    WEB_ASSERT(Temp.Arena.Items == TempArena.Items + TempArena.Offset - Temp.Arena.Capacity);
+    TempArena.Offset -= Temp.Arena.Capacity;
 }
 
 b32 WebReadFullFile(web_arena *Arena, const char *Path, web_string_view *OutContents) {

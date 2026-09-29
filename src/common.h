@@ -190,10 +190,12 @@ static inline void WebArenaReset(web_arena *Arena) {
     Arena->Offset = 0;
 }
 
-// FIXME(oleh): This pattern is wrong.
-// F1              -> call -> reset -> alloc
-// F1[TempData]|F2 -> call -> reset -> alloc overwrites F1[TempData]
-web_arena *WebGetTempArena(void);
+typedef struct {
+    web_arena Arena;
+} web_temp;
+
+web_temp WebGetTempArena(void);
+void WebReturnTempArena(web_temp Temp);
 
 #define WEB_ARENA_NEW(Arena, Type) ((Type *)WEB_MEMORY_ZERO(WebArenaPush((Arena), sizeof(Type)), sizeof(Type)))
 

@@ -493,7 +493,7 @@ static b32 HttpResponseParseStreaming(worker_data *WorkerData, web_http_response
         BufferCapacity = NewCapacity;
     }
 
-ReceiveLoop:
+ReceiveLoop: ;
     sz N = HttpReceive(WorkerData, Buffer, BufferCapacity);
     if (N < 0) {
         return 0;
@@ -561,9 +561,9 @@ static void HttpRequestSendProc(void *DataPtr) {
 
     b32 Result = 1;
 
-    web_arena *Temp = WebGetTempArena();
+    web_temp Temp = WebGetTempArena();
 
-    web_string_view RequestString = HttpRequestToString(Temp, WorkerData->Request);
+    web_string_view RequestString = HttpRequestToString(&Temp.Arena, WorkerData->Request);
 
     // FIXME(oleh): Refer to the spec to see if this is actually a valid thing to do or it should be
     // headers + streamed body.
@@ -585,6 +585,7 @@ static void HttpRequestSendProc(void *DataPtr) {
 
 End:
     WorkerData->StatusBit = Result;
+    WebReturnTempArena(Temp);
 }
 
 static sz HttpsCloseConnection(web_https_session *Sess) {
@@ -596,7 +597,7 @@ b32 WebHttpRequestSend(web_http_context *Context,
                        u16 Port,
                        web_http_request Request,
                        web_http_response *Response) {
-    web_arena *Temp = WebGetTempArena();
+    web_temp Temp = WebGetTempArena();
     b32 Result = 1;
 
     struct addrinfo Hints = {0};
@@ -606,7 +607,7 @@ b32 WebHttpRequestSend(web_http_context *Context,
     Hints.ai_socktype = SOCK_STREAM;
     Hints.ai_flags = AI_PASSIVE;
 
-    const char *HostnameCStr = WebStringViewCloneCStr(Temp, Hostname);
+    const char *HostnameCStr = WebStringViewCloneCStr(&Temp.Arena, Hostname);
 
     char PortCStr[6] = {0};
     sprintf(PortCStr, "%hu", Port);
@@ -647,7 +648,7 @@ b32 WebHttpRequestSend(web_http_context *Context,
     WorkerData->Request = Request;
     WorkerData->Response = Response;
 
-    web_thread_pool_task *Task = WEB_ARENA_NEW(Temp, web_thread_pool_task);
+    web_thread_pool_task *Task = WEB_ARENA_NEW(&Temp.Arena, web_thread_pool_task);
     WebThreadPoolTaskInit(Task, HttpRequestSendProc, WorkerData);
 
     WebThreadPoolScheduleTask(&Context->ThreadPool, Task);
@@ -657,6 +658,8 @@ b32 WebHttpRequestSend(web_http_context *Context,
     Result = WorkerData->StatusBit;
 
 End:
+    WebReturnTempArena(Temp);
+
     if (ServerAddr != NULL) {
         freeaddrinfo(ServerAddr);
     }
@@ -729,7 +732,7 @@ ReceiveLoop:
     case PARSE_STATE_BODY:         goto ParseBody;
     }
 
-ParseRequestLine:
+ParseRequestLine: ;
     web_string_view RequestLineSv = {.Items = Buffer + ParseOffset, .Count = BufferCount - ParseOffset};
 
     N = ParseRequestLine(RequestLineSv,

@@ -224,20 +224,22 @@ static b32 JsonNextToken(web_arena *Arena, web_string_view Input, sz *Position, 
 }
 
 static b32 JsonPeekToken(web_string_view Input, sz *Position, json_token *OutToken) {
-    web_arena *Temp = WebGetTempArena();
+    web_temp Temp = WebGetTempArena();
 
     sz SavedPosition = *Position;
-    b32 Result = JsonNextToken(Temp, Input, Position, OutToken);
+    b32 Result = JsonNextToken(&Temp.Arena, Input, Position, OutToken);
     *Position = SavedPosition;
+    WebReturnTempArena(Temp);
     return Result;
 }
 
 static b32 ParseF64(web_string_view Buffer, f64 *Out) {
-    web_arena *Temp = WebGetTempArena();
-    const char *NumberCStr = WebStringViewCloneCStr(Temp, Buffer);
+    web_temp Temp = WebGetTempArena();
+    const char *NumberCStr = WebStringViewCloneCStr(&Temp.Arena, Buffer);
 
     char *EndPtr;
     *Out = strtod(NumberCStr, &EndPtr);
+    WebReturnTempArena(Temp);
     return !(*Out == 0.0 && NumberCStr == EndPtr);
 }
 
@@ -602,16 +604,18 @@ void WebJsonPutNull(web_json_writer WriterPtr) {
 
 void WebJsonPutNumber(web_json_writer WriterPtr, f64 Number) {
     writer_state *Writer = (writer_state *) WriterPtr;
-    web_arena *TempArena = WebGetTempArena();
+    web_temp Temp = WebGetTempArena();
 
     web_string_view NumberString;
     f64 Integral;
     f64 Fractional = modf(Number, &Integral);
     if (fabs(Fractional) == 0.0) {
-        NumberString = WebArenaFormat(TempArena, "%lld", (s64)Number);
+        NumberString = WebArenaFormat(&Temp.Arena, "%lld", (s64)Number);
     } else {
-        NumberString = WebArenaFormat(TempArena, "%f", Number);
+        NumberString = WebArenaFormat(&Temp.Arena, "%f", Number);
     }
+
+    WebReturnTempArena(Temp);
 
     WEB_ARRAY_EXTEND(Writer->Arena, &Writer->OutputString, &NumberString);
 }

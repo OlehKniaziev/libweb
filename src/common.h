@@ -127,6 +127,7 @@ static inline uz WebArenaAvail(web_arena *Arena) {
     return Arena->Capacity - Arena->Offset;
 }
 
+#ifndef WEB_MEMORY_SANITIZER
 static inline void *WebArenaPush(web_arena *Arena, uz Size) {
     Size = WebAlignForward(Size, sizeof(uz));
     uz AvailableBytes = WebArenaAvail(Arena);
@@ -137,6 +138,12 @@ static inline void *WebArenaPush(web_arena *Arena, uz Size) {
     Arena->LastAlloc = Ptr;
     return Ptr;
 }
+#else
+static inline void *WebArenaPush(web_arena *Arena, uz Size) {
+    (void) Arena;
+    return malloc(Size);
+}
+#endif // WEB_MEMORY_SANITIZER
 
 #define WEB_ARENA_PUSH_ZERO(Arena, Size) (WEB_MEMORY_ZERO(WebArenaPush((Arena), (Size)), (Size)))
 
@@ -195,10 +202,6 @@ static inline char *WebStringViewCloneCStr(web_arena *Arena, web_string_view Sv)
     memcpy(Buffer, Sv.Items, Sv.Count);
     Buffer[Sv.Count] = '\0';
     return Buffer;
-}
-
-static inline char *WebStringViewCloneCStrMalloc(web_string_view Sv) {
-    return strndup((char *) Sv.Items, Sv.Count);
 }
 
 b32 WebReadFullFile(web_arena *Arena, const char *Path, web_string_view *OutContents);

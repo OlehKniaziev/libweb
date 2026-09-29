@@ -341,7 +341,7 @@ static b32 JsonParseValue(web_arena *Arena, web_string_view Input, sz *Position,
                 Object.Capacity = NewCapacity;
             }
 
-            sz ObjectIndex = (sz) WebHashFnv1(KeyToInsert) % Object.Capacity;
+            sz ObjectIndex = (sz)(WebHashFnv1(KeyToInsert) % (u64)Object.Capacity);
 
             while (1) {
                 web_string_view CurrentKey = Object.Keys[ObjectIndex];
@@ -359,6 +359,8 @@ static b32 JsonParseValue(web_arena *Arena, web_string_view Input, sz *Position,
             if (!JsonNextToken(Arena, Input, Position, &Token)) return 0;
             if (Token.Type == TOKEN_RBRACE) break;
             if (Token.Type == TOKEN_COMMA) goto ParseKeyValue;
+
+            return 0;
         }
 
         OutValue->Type = JSON_OBJECT;

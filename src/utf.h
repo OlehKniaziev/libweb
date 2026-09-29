@@ -8,6 +8,11 @@ typedef u32 web_code_point;
 #define WEB_CODE_POINT_ASCII_MAX ((web_code_point)127)
 #define WEB_CODE_POINT_MAX ((web_code_point)0x0010FFFFF)
 
+#define WEB_UTF16_LEADING_SURROGATE_MIN  0xD800
+#define WEB_UTF16_LEADING_SURROGATE_MAX  0xDBFF
+#define WEB_UTF16_TRAILING_SURROGATE_MIN 0xDC00
+#define WEB_UTF16_TRAILING_SURROGATE_MAX 0xDFFF
+
 typedef struct {
     web_string_view View;
     sz Pos;

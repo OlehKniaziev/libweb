@@ -40,64 +40,70 @@ static inline b32 JsonIsTerminalOrWhitespace(u8 Char) {
            Char == ':';
 }
 
-static b32 JsonNextToken(web_arena *Arena, web_string_view Input, sz *Position, json_token *OutToken) {
-    sz CurrentPosition = *Position;
-
-    for (; CurrentPosition < Input.Count; ++CurrentPosition) {
-        if (!JsonIsWhitespace(Input.Items[CurrentPosition])) break;
+static b32 ReadEscapedCodePoint(web_string_view Input, sz *Position, web_code_point *Out) {
+    s32 N = sscanf((const char *)Input.Items + *Position, "\\u%4x", Out);
+    if (N != 1) {
+        return 0;
     }
 
-    if (CurrentPosition >= Input.Count) return 0;
+    *Position += 6;
+    return 1;
+}
 
-    *Position = CurrentPosition;
+static b32 JsonNextToken(web_arena *Arena, web_string_view Input, sz *Position, json_token *OutToken) {
+    for (; *Position < Input.Count; ++*Position) {
+        if (!JsonIsWhitespace(Input.Items[*Position])) break;
+    }
 
-    u8 CurrentChar = Input.Items[CurrentPosition];
+    if (*Position >= Input.Count) return 0;
+
+    u8 CurrentChar = Input.Items[*Position];
 
     switch (CurrentChar) {
     case '[': {
         OutToken->Type = TOKEN_LBRACKET;
-        OutToken->Value.Items = Input.Items + CurrentPosition;
+        OutToken->Value.Items = Input.Items + *Position;
         OutToken->Value.Count = 1;
         *Position += 1;
         return 1;
     }
     case ']': {
         OutToken->Type = TOKEN_RBRACKET;
-        OutToken->Value.Items = Input.Items + CurrentPosition;
+        OutToken->Value.Items = Input.Items + *Position;
         OutToken->Value.Count = 1;
         *Position += 1;
         return 1;
     }
     case '{': {
         OutToken->Type = TOKEN_LBRACE;
-        OutToken->Value.Items = Input.Items + CurrentPosition;
+        OutToken->Value.Items = Input.Items + *Position;
         OutToken->Value.Count = 1;
         *Position += 1;
         return 1;
     }
     case '}': {
         OutToken->Type = TOKEN_RBRACE;
-        OutToken->Value.Items = Input.Items + CurrentPosition;
+        OutToken->Value.Items = Input.Items + *Position;
         OutToken->Value.Count = 1;
         *Position += 1;
         return 1;
     }
     case ',': {
         OutToken->Type = TOKEN_COMMA;
-        OutToken->Value.Items = Input.Items + CurrentPosition;
+        OutToken->Value.Items = Input.Items + *Position;
         OutToken->Value.Count = 1;
         *Position += 1;
         return 1;
     }
     case ':': {
         OutToken->Type = TOKEN_COLON;
-        OutToken->Value.Items = Input.Items + CurrentPosition;
+        OutToken->Value.Items = Input.Items + *Position;
         OutToken->Value.Count = 1;
         *Position += 1;
         return 1;
     }
     case '"': {
-        ++CurrentPosition;
+        ++*Position;
         struct {
             u8 *Items;
             uz Capacity;
@@ -105,17 +111,17 @@ static b32 JsonNextToken(web_arena *Arena, web_string_view Input, sz *Position, 
         } String;
         WEB_ARRAY_INIT(Arena, &String);
 
-        for (; CurrentPosition < Input.Count; ++CurrentPosition) {
-            u8 Char = Input.Items[CurrentPosition];
+        for (; *Position < Input.Count; ++*Position) {
+            u8 Char = Input.Items[*Position];
             if (Char == '"') break;
 
             if (Char == '\\') {
-                ++CurrentPosition;
-                if (CurrentPosition >= Input.Count) {
+                ++*Position;
+                if (*Position >= Input.Count) {
                     break;
                 }
 
-                Char = Input.Items[CurrentPosition];
+                Char = Input.Items[*Position];
 
                 switch (Char) {
                 case '"': {
@@ -151,13 +157,31 @@ static b32 JsonNextToken(web_arena *Arena, web_string_view Input, sz *Position, 
                     break;
                 }
                 case 'u': {
+                    *Position -= 1;
+
                     web_code_point CodePoint = 0;
-                    s32 N = sscanf((const char *)Input.Items + CurrentPosition + 1, "%4x", &CodePoint);
-                    if (N != 1) {
+                    if (!ReadEscapedCodePoint(Input, Position, &CodePoint)) {
                         return 0;
                     }
 
-                    CurrentPosition += 4;
+                    if (CodePoint >= WEB_UTF16_LEADING_SURROGATE_MIN && CodePoint <= WEB_UTF16_LEADING_SURROGATE_MAX) {
+                        // UTF-16 surrogate
+                        web_code_point LeadingSurrogate = CodePoint;
+                        web_code_point TrailingSurrogate = 0;
+
+                        if (!ReadEscapedCodePoint(Input, Position, &TrailingSurrogate)) {
+                            return 0;
+                        }
+
+                        if (TrailingSurrogate < WEB_UTF16_TRAILING_SURROGATE_MIN ||
+                            TrailingSurrogate > WEB_UTF16_TRAILING_SURROGATE_MAX) {
+                            return 0;
+                        }
+
+                        CodePoint = (((LeadingSurrogate - WEB_UTF16_LEADING_SURROGATE_MIN) << 10)
+                            | (TrailingSurrogate - WEB_UTF16_TRAILING_SURROGATE_MIN))
+                            + (web_code_point)0x10000;
+                    }
 
                     u8 EncodeBuf[4] = {0};
                     sz EncodeBufCount = sizeof(EncodeBuf)/sizeof(*EncodeBuf);
@@ -177,6 +201,8 @@ static b32 JsonNextToken(web_arena *Arena, web_string_view Input, sz *Position, 
                         WEB_ARRAY_PUSH(Arena, &String, Byte);
                     }
 
+                    *Position -= 1;
+
                     break;
                 }
                 default: return 0;
@@ -186,7 +212,7 @@ static b32 JsonNextToken(web_arena *Arena, web_string_view Input, sz *Position, 
             }
         }
 
-        if (CurrentPosition >= Input.Count) {
+        if (*Position >= Input.Count) {
             OutToken->Type = TOKEN_UNCLOSED_STRING;
         } else {
             OutToken->Type = TOKEN_STRING;
@@ -195,17 +221,17 @@ static b32 JsonNextToken(web_arena *Arena, web_string_view Input, sz *Position, 
         OutToken->Value.Items = String.Items;
         OutToken->Value.Count = String.Count;
 
-        *Position = CurrentPosition + 1;
+        *Position += 1;
         return 1;
     }
     default: {
-        uz ValueStart = CurrentPosition;
-        for (; CurrentPosition < Input.Count; ++CurrentPosition) {
-            u8 Char = Input.Items[CurrentPosition];
+        uz ValueStart = *Position;
+        for (; *Position < Input.Count; ++*Position) {
+            u8 Char = Input.Items[*Position];
             if (JsonIsTerminalOrWhitespace(Char)) break;
         }
 
-        web_string_view Value = {.Items = Input.Items + ValueStart, .Count = CurrentPosition - ValueStart};
+        web_string_view Value = {.Items = Input.Items + ValueStart, .Count = *Position - ValueStart};
         if (WebStringViewEqualCStr(Value, "true")) {
             OutToken->Type = TOKEN_TRUE;
         } else if (WebStringViewEqualCStr(Value, "false")) {
@@ -216,7 +242,7 @@ static b32 JsonNextToken(web_arena *Arena, web_string_view Input, sz *Position, 
             OutToken->Type = TOKEN_NUMBER;
         }
 
-        *Position = CurrentPosition;
+        *Position = *Position;
         OutToken->Value = Value;
         return 1;
     }

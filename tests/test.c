@@ -129,6 +129,15 @@ void TestJsonDecoding_Unicode(web_arena *Arena) {
     web_string_view S = Value.String;
 
     SV_EQUAL(S, WEB_SV_LIT("аб"));
+
+    Input = WEB_SV_LIT("\"\\uD83D\\uDE80\"");
+
+    WEB_VERIFY(WebJsonParse(Arena, Input, &Value));
+    WEB_VERIFY(Value.Type == JSON_STRING);
+
+    S = Value.String;
+
+    SV_EQUAL(S, WEB_SV_LIT("🚀"));
 }
 
 void TestJsonEncoding(void) {

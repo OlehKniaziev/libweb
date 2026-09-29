@@ -336,8 +336,8 @@ static b32 JsonParseValue(web_arena *Arena, web_string_view Input, sz *Position,
     case TOKEN_LBRACE: {
         web_json_object Object;
         Object.Capacity = DEFAULT_OBJECT_CAPACITY;
-        Object.Keys = WEB_ARENA_PUSH_ZERO(Arena, sizeof(*Object.Keys) * DEFAULT_OBJECT_CAPACITY);
-        Object.Values = WEB_ARENA_PUSH_ZERO(Arena, sizeof(*Object.Values) * DEFAULT_OBJECT_CAPACITY);
+        Object.Keys = WEB_ARENA_NEW_MANY(Arena, typeof(*Object.Keys), DEFAULT_OBJECT_CAPACITY);
+        Object.Values = WEB_ARENA_NEW_MANY(Arena, typeof(*Object.Values), DEFAULT_OBJECT_CAPACITY);
         Object.Count = 0;
 
         while (1) {
@@ -364,8 +364,8 @@ static b32 JsonParseValue(web_arena *Arena, web_string_view Input, sz *Position,
 
             if (ObjectLoadPercentage >= 65) {
                 uz NewCapacity = (Object.Capacity + 1) * 3;
-                Object.Keys = WebArenaRealloc(Arena, Object.Keys, Object.Capacity * sizeof(*Object.Keys), NewCapacity * sizeof(*Object.Keys));
-                Object.Values = WebArenaRealloc(Arena, Object.Values, Object.Capacity * sizeof(*Object.Values), NewCapacity * sizeof(*Object.Values));
+                Object.Keys = WebArenaRealloc(Arena, Object.Keys, Object.Capacity * sizeof(*Object.Keys), NewCapacity * sizeof(*Object.Keys), alignof(*Object.Keys));
+                Object.Values = WebArenaRealloc(Arena, Object.Values, Object.Capacity * sizeof(*Object.Values), NewCapacity * sizeof(*Object.Values), alignof(*Object.Keys));
                 Object.Capacity = NewCapacity;
             }
 
@@ -636,7 +636,7 @@ void WebJsonPutNumber(web_json_writer WriterPtr, f64 Number) {
     f64 Integral;
     f64 Fractional = modf(Number, &Integral);
     if (fabs(Fractional) == 0.0) {
-        NumberString = WebArenaFormat(&Temp.Arena, "%lld", (s64)Number);
+        NumberString = WebArenaFormat(&Temp.Arena, "%ld", (s64)Number);
     } else {
         NumberString = WebArenaFormat(&Temp.Arena, "%f", Number);
     }

@@ -479,7 +479,7 @@ static b32 HttpResponseParseStreaming(worker_data *WorkerData, web_http_response
 
     uz BufferCount = 0;
     uz BufferCapacity = 1024;
-    u8 *Buffer = WEB_ARENA_PUSH_ZERO(Arena, BufferCapacity);
+    u8 *Buffer = WEB_ARENA_PUSH_ZERO(Arena, BufferCapacity, 1);
 
     uz ParseOffset = 0;
 
@@ -489,7 +489,7 @@ static b32 HttpResponseParseStreaming(worker_data *WorkerData, web_http_response
 
     if (BufferCount >= BufferCapacity) {
         uz NewCapacity = BufferCapacity << 1;
-        WebArenaRealloc(Arena, Buffer, BufferCapacity, NewCapacity);
+        WebArenaRealloc(Arena, Buffer, BufferCapacity, NewCapacity, 1);
         BufferCapacity = NewCapacity;
     }
 
@@ -702,7 +702,7 @@ static b32 HttpRequestParseStreaming(worker_data *WorkerData,
 
     sz BufferCount = 0;
     sz BufferCapacity = INITIAL_PARSE_BUFFER_CAPACITY;
-    u8 *Buffer = WebArenaPush(Arena, BufferCapacity);
+    u8 *Buffer = WebArenaPush(Arena, BufferCapacity, 1);
 
     request_parse_state ParseState = PARSE_STATE_REQUEST_LINE;
 
@@ -714,7 +714,7 @@ static b32 HttpRequestParseStreaming(worker_data *WorkerData,
 ReceiveLoop:
     if (BufferCount >= BufferCapacity) {
         BufferCapacity <<= 1;
-        Buffer = WebArenaRealloc(Arena, Buffer, BufferCount, BufferCapacity);
+        Buffer = WebArenaRealloc(Arena, Buffer, BufferCount, BufferCapacity, 1);
     }
 
     N = HttpReceive(WorkerData, Buffer + WriteOffset, BufferCapacity - WriteOffset);
@@ -1019,7 +1019,7 @@ static void *NewContextPoolProc(uz *Size) {
     // FIXME(oleh): Replace this asap #2.
     web_http_response_context *ResponseContext = malloc(*Size);
     WEB_STRUCT_ZERO(ResponseContext);
-    WebArenaInit(&ResponseContext->Arena, DEFAULT_REQUEST_ARENA_CAPACITY);
+    WebArenaInitFixed(&ResponseContext->Arena, DEFAULT_REQUEST_ARENA_CAPACITY);
     return ResponseContext;
 }
 
@@ -1037,7 +1037,7 @@ b32 WebHttpContextInit(web_http_context_config *Config, web_http_context *Contex
         Config->GlobalPoolCapacity = HTTP_CONTEXT_ARENA_CAPACITY;
     }
 
-    WebArenaInit(&Context->Arena, Config->GlobalPoolCapacity);
+    WebArenaInitChained(&Context->Arena, Config->GlobalPoolCapacity);
 
     WebSyncPoolInit(&Context->WorkerPool, NewWorkerDataPoolProc);
     WebSyncPoolInit(&Context->TaskPool, NewTaskProc);
@@ -1057,8 +1057,16 @@ b32 WebHttpServerInit(web_http_context *Context, web_http_server *Server) {
         HttpsInit(Context->HttpsProvider);
     }
 
-    Server->Handlers = WebArenaPush(&Context->Arena, sizeof(*Server->Handlers) * HTTP_SERVER_MAX_HANDLERS);
-    Server->HandlersPaths = WebArenaPush(&Context->Arena, sizeof(*Server->HandlersPaths) * HTTP_SERVER_MAX_HANDLERS);
+    Server->Handlers = WEB_ARENA_NEW_MANY(
+            &Context->Arena,
+            typeof(*Server->Handlers),
+            HTTP_SERVER_MAX_HANDLERS
+    );
+    Server->HandlersPaths = WEB_ARENA_NEW_MANY(
+            &Context->Arena,
+            typeof(*Server->HandlersPaths),
+            HTTP_SERVER_MAX_HANDLERS
+    );
 
     Server->HandlersCount = 0;
 

@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <stdalign.h>
 
 #define _WEB_DO_ASSERT(Msg, X) do {                                                  \
         if (!(X)) {                                                     \
@@ -115,80 +116,56 @@ static inline b32 WebStringViewEqual(web_string_view Lhs, web_string_view Rhs) {
 typedef struct {
     u8 *Items;
     void *LastAlloc;
-    sz Capacity;
-    sz Offset;
+    uz Capacity;
+    uz Offset;
+} web_fixed_arena;
+
+typedef struct web_chained_arena_block {
+    struct web_chained_arena_block *Next;
+    u8 *Items;
+    void *LastAlloc;
+    uz Capacity;
+    uz Offset;
+} web_chained_arena_block;
+
+typedef struct {
+    web_chained_arena_block *Head;
+    web_chained_arena_block *LastAllocBlock;
+} web_chained_arena;
+
+typedef struct {
+    b32 Chained;
+    union {
+        web_fixed_arena Fixed;
+        web_chained_arena Chained;
+    } U;
 } web_arena;
 
 static inline uz WebAlignForward(uz Size, uz Alignment) {
+    WEB_VERIFY(Alignment == 1 || (Alignment & 1) == 0);
     return Size + ((Alignment - (Size & (Alignment - 1))) & (Alignment - 1));
 }
 
-static inline uz WebArenaAvail(web_arena *Arena) {
-    return Arena->Capacity - Arena->Offset;
-}
+void *WebArenaPush(web_arena *Arena, uz Size, uz Align);
 
-#ifndef WEB_MEMORY_SANITIZER
-static inline void *WebArenaPush(web_arena *Arena, uz Size) {
-    Size = WebAlignForward(Size, sizeof(uz));
-    uz AvailableBytes = WebArenaAvail(Arena);
-    if (AvailableBytes < Size) WEB_PANIC_FMT("Arena out of memory for requested size %zu!", Size);
+#define WEB_ARENA_PUSH_ZERO(Arena, Size, Align) (WEB_MEMORY_ZERO(WebArenaPush((Arena), (Size), (Align)), WebAlignForward((Size), (Align))))
 
-    void *Ptr = Arena->Items + Arena->Offset;
-    Arena->Offset += Size;
-    Arena->LastAlloc = Ptr;
-    return Ptr;
-}
+void WebArenaInitFixed(web_arena *Arena, uz Capacity);
+void WebArenaInitChained(web_arena *Arena, uz Capacity);
+
+#ifdef __GNUC__
+#    define WEB_ATTRIBUTE_PRINTF(Fmt, Args) __attribute__((format(printf, Fmt, Args)))
 #else
-static inline void *WebArenaPush(web_arena *Arena, uz Size) {
-    (void) Arena;
-    return malloc(Size);
-}
-#endif // WEB_MEMORY_SANITIZER
+#    define WEB_ATTRIBUTE_PRINTF(Fmt, Args)
+#endif // __GNUC__
 
-#define WEB_ARENA_PUSH_ZERO(Arena, Size) (WEB_MEMORY_ZERO(WebArenaPush((Arena), (Size)), (Size)))
+web_string_view WebArenaFormat(web_arena *Arena, const char *Fmt, ...) WEB_ATTRIBUTE_PRINTF(2, 3);
 
-static inline void WebArenaInit(web_arena *Arena, uz Capacity) {
-    Arena->Capacity = Capacity;
-    Arena->Offset = 0;
-    Arena->Items = (u8 *)calloc(Capacity, sizeof(u8));
-    Arena->LastAlloc = NULL;
-}
+void *WebArenaRealloc(web_arena *Arena, void *OldPtr, uz OldSize, uz NewSize, uz Align);
 
-static inline web_string_view WebArenaFormat(web_arena *Arena, const char *Fmt, ...) {
-    va_list Args;
-    va_start(Args, Fmt);
-    uz BytesNeeded = vsnprintf(NULL, 0, Fmt, Args);
-    ++BytesNeeded; // NOTE(oleh): Null terminator.
-    va_end(Args);
+void WebArenaPop(web_arena *Arena, uz Size);
 
-    u8 *Buffer = (u8 *)WebArenaPush(Arena, BytesNeeded);
-    va_start(Args, Fmt);
-    vsprintf((char *)Buffer, Fmt, Args);
-    va_end(Args);
-
-    web_string_view Result;
-    Result.Items = Buffer;
-    Result.Count = BytesNeeded - 1;
-    return Result;
-}
-
-static inline void *WebArenaRealloc(web_arena *Arena, void *OldPtr, uz OldSize, uz NewSize) {
-    if (Arena->LastAlloc == OldPtr) {
-        OldSize = WebAlignForward(OldSize, sizeof(uz));
-        NewSize = WebAlignForward(NewSize, sizeof(uz));
-        sz Diff = (sz)NewSize - (sz)OldSize;
-        Arena->Offset += Diff;
-    }
-    void* NewPtr = WebArenaPush(Arena, NewSize);
-    memcpy(NewPtr, OldPtr, OldSize);
-    return NewPtr;
-}
-
-void WebArenaPop(web_arena *, uz);
-
-static inline void WebArenaReset(web_arena *Arena) {
-    Arena->Offset = 0;
-}
+void WebArenaReset(web_arena *Arena);
 
 typedef struct {
     web_arena Arena;
@@ -197,10 +174,13 @@ typedef struct {
 web_temp WebGetTempArena(void);
 void WebReturnTempArena(web_temp Temp);
 
-#define WEB_ARENA_NEW(Arena, Type) ((Type *)WEB_MEMORY_ZERO(WebArenaPush((Arena), sizeof(Type)), sizeof(Type)))
+#define WEB_ARENA_NEW(Arena, Type) ((Type *)WEB_MEMORY_ZERO(WebArenaPush((Arena), sizeof(Type), alignof(Type)), sizeof(Type)))
+#define WEB_ARENA_NEW_MANY(Arena, Type, Count) ((Type *)WEB_MEMORY_ZERO(WebArenaPush((Arena), sizeof(Type) * (Count), alignof(Type)), sizeof(Type) * (Count)))
+
+#define WEB_ARENA_REALLOC_ITEMS(Arena, Items, OldCount, NewCount) (WebArenaRealloc((Arena), (Items), sizeof(*(Items)) * (OldCount), sizeof(*Items) * (NewCount), alignof(*(Items))))
 
 static inline char *WebStringViewCloneCStr(web_arena *Arena, web_string_view Sv) {
-    char *Buffer = (char *)WebArenaPush(Arena, Sv.Count + 1);
+    char *Buffer = (char *)WebArenaPush(Arena, Sv.Count + 1, sizeof(char));
     memcpy(Buffer, Sv.Items, Sv.Count);
     Buffer[Sv.Count] = '\0';
     return Buffer;
@@ -213,13 +193,13 @@ b32 WebReadFullFile(web_arena *Arena, const char *Path, web_string_view *OutCont
 #define WEB_ARRAY_INIT(Arena, Array) do {                                   \
         (Array)->Capacity = WEB_DEFAULT_ARRAY_CAPACITY;                     \
         (Array)->Count = 0;                                             \
-        (Array)->Items = WEB_ARENA_PUSH_ZERO((Arena), sizeof(*(Array)->Items) * WEB_DEFAULT_ARRAY_CAPACITY); \
+        (Array)->Items = WEB_ARENA_PUSH_ZERO((Arena), sizeof(*(Array)->Items) * WEB_DEFAULT_ARRAY_CAPACITY, alignof(*(Array)->Items)); \
     } while (0)
 
 #define WEB_ARRAY_PUSH(Arena, Array, Element) do {                          \
         if ((Array)->Count >= (Array)->Capacity) {                      \
             sz NewCapacity = ((Array)->Capacity + 1) * 2;               \
-            (Array)->Items = WebArenaRealloc((Arena), (Array)->Items, sizeof(*(Array)->Items) * (Array)->Capacity, sizeof(*(Array)->Items) * NewCapacity); \
+            (Array)->Items = WebArenaRealloc((Arena), (Array)->Items, sizeof(*(Array)->Items) * (Array)->Capacity, sizeof(*(Array)->Items) * NewCapacity, alignof(*(Array)->Items)); \
             (Array)->Capacity = NewCapacity;                            \
         }                                                               \
                                                                         \

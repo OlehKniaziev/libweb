@@ -35,7 +35,7 @@ b32 WebThreadPoolInit(web_thread_pool *ThreadPool, web_arena *Arena, web_thread_
     ThreadPool->Arena = Arena;
     ThreadPool->ThreadsCount = Config->NumThreads;
 
-    ThreadPool->Threads = WEB_ARENA_PUSH_ZERO(Arena, sizeof(*ThreadPool->Threads) * ThreadPool->ThreadsCount);
+    ThreadPool->Threads = WEB_ARENA_NEW_MANY(Arena, typeof(*ThreadPool->Threads), ThreadPool->ThreadsCount);
 
     for (uz I = 0; I < ThreadPool->ThreadsCount; ++I) {
         if (!WebThreadLaunch(&ThreadPool->Threads[I], ThreadPoolWorkerProc, ThreadPool)) return 0;
@@ -48,7 +48,7 @@ b32 WebThreadPoolInit(web_thread_pool *ThreadPool, web_arena *Arena, web_thread_
     WebMutexInit(&ThreadPool->QueueCondMu);
 
     ThreadPool->QueueCapacity = 128;
-    ThreadPool->QueueItems = WEB_ARENA_PUSH_ZERO(Arena, sizeof(*ThreadPool->QueueItems) * ThreadPool->QueueCapacity);
+    ThreadPool->QueueItems = WEB_ARENA_NEW_MANY(Arena, typeof(*ThreadPool->QueueItems), ThreadPool->QueueCapacity);
 
     return 1;
 }
@@ -64,10 +64,12 @@ void WebThreadPoolScheduleTask(web_thread_pool *ThreadPool, web_thread_pool_task
 
     if (ThreadPool->QueueTail == ThreadPool->QueueHead) {
         uz NewCapacity = ThreadPool->QueueCapacity * 2;
-        ThreadPool->QueueItems = WebArenaRealloc(ThreadPool->Arena,
-                                                 ThreadPool->QueueItems,
-                                                 sizeof(*ThreadPool->QueueItems) * ThreadPool->QueueCapacity,
-                                                 sizeof(*ThreadPool->QueueItems) * NewCapacity);
+        ThreadPool->QueueItems = WEB_ARENA_REALLOC_ITEMS(
+                ThreadPool->Arena,
+                ThreadPool->QueueItems,
+                ThreadPool->QueueCapacity,
+                NewCapacity
+        );
         ThreadPool->QueueCapacity = NewCapacity;
     }
 

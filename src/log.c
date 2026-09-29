@@ -33,7 +33,7 @@ void WebLog(web_log_level Level,
 
     web_temp Temp = WebGetTempArena();
 
-    char *Message = WebArenaPush(&Temp.Arena, MessageCount + 1);
+    char *Message = WebArenaPush(&Temp.Arena, MessageCount + 1, 1);
 
     va_start(Args, Fmt);
     vsnprintf(Message, MessageCount + 1, Fmt, Args);

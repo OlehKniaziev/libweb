@@ -33,6 +33,7 @@ typedef struct {
     X(TRACE)                                \
     X(CONNECT)
 
+// TODO(oleh): Decide what to do about extension methods.
 typedef enum {
 #define X(method) HTTP_##method,
     WEB_ENUM_HTTP_METHODS
@@ -51,13 +52,24 @@ typedef struct {
 } web_http_headers;
 
 #define WEB_ENUM_HTTP_VERSIONS \
-    X(1_0, "HTTP/1.0") \
-    X(1_1, "HTTP/1.1")
+    X(1, 0, "HTTP/1.0") \
+    X(1, 1, "HTTP/1.1")
 
-typedef enum {
-#define X(Version, String) HTTP_##Version,
+#define WEB_MAKE_HTTP_NUMBER(Major, Minor) ((u32)(Minor) << 16 | (u32)(Major))
+
+enum {
+#define X(Major, Minor, String) HTTP_##Major##_##Minor = WEB_MAKE_HTTP_NUMBER((Major), (Minor)),
 WEB_ENUM_HTTP_VERSIONS
 #undef X
+};
+
+// @Portability(oleh): Will not work on big-endian systems.
+typedef union {
+    struct {
+        u16 Major;
+        u16 Minor;
+    };
+    u32 Number;
 } web_http_version;
 
 #define WEB_ENUM_HTTP_RESPONSE_STATUSES                             \

@@ -2,17 +2,13 @@
 #include "threadpool.h"
 #include "log.h"
 
+#include <ctype.h>
+#include <stdint.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <netdb.h>
 
 #include <errno.h>
-
-static const char *HttpVersionStrings[] = {
-#define X(Version, String) [HTTP_##Version] = String,
-WEB_ENUM_HTTP_VERSIONS
-#undef X
-};
 
 static const char *HttpMethodNames[] = {
 #define X(Method) [HTTP_##Method] = #Method,
@@ -89,9 +85,12 @@ static void HttpHeadersFormat(web_arena *Arena, web_dynamic_string *String, web_
 
 #define WEB_HTTP_RESPONSE_MAX_SIZE (128l * 1024l * 512l)
 
+static web_string_view GetHTTPVersionString(web_arena *Arena, web_http_version Version) {
+    return WebArenaFormat(Arena, "HTTP/%u.%u", Version.Major, Version.Minor);
+}
+
 static web_string_view HttpRequestToString(web_arena *Arena, web_http_request Request) {
-    const char *VersionString = HttpVersionStrings[Request.Version];
-    web_string_view VersionSv = WEB_SV_LIT(VersionString);
+    web_string_view VersionString = GetHTTPVersionString(Arena, Request.Version);
 
     const char *MethodString = HttpMethodNames[Request.Method];
     web_string_view MethodSv = WEB_SV_LIT(MethodString);
@@ -104,7 +103,7 @@ static web_string_view HttpRequestToString(web_arena *Arena, web_http_request Re
     WEB_ARRAY_PUSH(Arena, &RequestString, ' ');
     WEB_ARRAY_EXTEND(Arena, &RequestString, &Request.Path);
     WEB_ARRAY_PUSH(Arena, &RequestString, ' ');
-    WEB_ARRAY_EXTEND(Arena, &RequestString, &VersionSv);
+    WEB_ARRAY_EXTEND(Arena, &RequestString, &VersionString);
     WEB_ARRAY_PUSH(Arena, &RequestString, '\r');
     WEB_ARRAY_PUSH(Arena, &RequestString, '\n');
 
@@ -232,15 +231,86 @@ static sz ParseHeaders(web_arena *Arena,
     return -1;
 }
 
-static b32 ParseHTTPVersion(web_string_view Input, web_http_version *Version) {
-#define X(HttpVersion, VersionString) if (WebStringViewEqualCStr(Input, VersionString)) { \
-    *Version = HTTP_##HttpVersion; \
+static b32 ParseHTTPVersion_Fast(web_string_view Input, web_http_version *Version) {
+#define X(Major, Minor, VersionString) if (WebStringViewEqualCStr(Input, VersionString)) { \
+    Version->Number = HTTP_##Major##_##Minor; \
     return 1; \
     }
 WEB_ENUM_HTTP_VERSIONS
 #undef X
 
     return 0;
+}
+
+static b32 ParseHTTPVersion_Slow_Component(web_string_view *Input, u16 *OutComponent) {
+    u32 Component = 0;
+
+    sz CharIdx = 0;
+
+    for (; CharIdx < Input->Count; ++CharIdx) {
+        u8 Char = Input->Items[CharIdx];
+
+        if (isdigit(Char)) {
+            Component = Component * 10 + Char - '0';
+
+            if (Component > UINT16_MAX) {
+                WEB_LOG_FMT(DEBUG, HTTP, "Parsed HTTP version component '%u' is out of range", Component);
+                return 0;
+            }
+        } else if (Char == '.') {
+            break;
+        } else {
+            return 0;
+        }
+    }
+
+    WEB_ASSERT(Component <= UINT16_MAX);
+    *OutComponent = (u16) Component;
+
+    Input->Count -= CharIdx;
+    Input->Items += CharIdx;
+
+    return 1;
+}
+
+static b32 ParseHTTPVersion_Slow(web_string_view Input, web_http_version *Version) {
+    web_string_view Prefix = WEB_SV_LIT("HTTP/");
+    if (!WebStringViewHasPrefix(Input, Prefix)) {
+        return 0;
+    }
+
+    Input.Count -= Prefix.Count;
+    Input.Items += Prefix.Count;
+
+    if (!ParseHTTPVersion_Slow_Component(&Input, &Version->Major)) {
+        return 0;
+    }
+
+    // NOTE(oleh): No dot found. String of form 'HTTP/<num>'
+    if (Input.Count == 0) {
+        return 0;
+    }
+
+    WEB_ASSERT(Input.Items[0] == '.');
+
+    Input.Items += 1;
+    Input.Count -= 1;
+
+    if (!ParseHTTPVersion_Slow_Component(&Input, &Version->Minor)) {
+        return 0;
+    }
+
+    // NOTE(oleh): Trailing garbage bytes.
+    if (Input.Count != 0) {
+        return 0;
+    }
+
+    return 1;
+}
+
+// @Spec(oleh): https://www.rfc-editor.org/info/rfc2616/#section-3.1.
+static b32 ParseHTTPVersion(web_string_view Input, web_http_version *Version) {
+    return ParseHTTPVersion_Fast(Input, Version) || ParseHTTPVersion_Slow(Input, Version);
 }
 
 static b32 ParseStatusCode(web_string_view Buffer, web_http_response_status *StatusCode) {
@@ -328,6 +398,7 @@ b32 WebHttpResponseParse(web_arena *Arena, web_string_view Buffer, web_http_resp
     return 1;
 }
 
+// @Spec(oleh): https://www.rfc-editor.org/info/rfc2616/#section-5.1.1
 static b32 ParseHTTPMethod(web_string_view Input, web_http_method *Out) {
 #define X(Method) if (WebStringViewEqualCStr(Input, #Method)) {  \
     *Out = HTTP_##Method;                                  \
@@ -341,65 +412,70 @@ WEB_ENUM_HTTP_METHODS
     return 0;
 }
 
+static b32 ReadRequestLineChunk(web_string_view Buffer, sz *Pointer, web_string_view *Chunk) {
+    sz Start = *Pointer;
+
+    for (; *Pointer < Buffer.Count; ++*Pointer) {
+        u8 Char = Buffer.Items[*Pointer];
+        if (Char == ' ') {
+            break;
+        }
+        if (Char == '\r' || Char == '\n') {
+            return 0;
+        }
+    }
+
+    if (*Pointer >= Buffer.Count) {
+        return 0;
+    }
+
+    Chunk->Items = Buffer.Items + Start;
+    Chunk->Count = *Pointer - Start;
+
+    *Pointer += 1;
+
+    return 1;
+}
+
+// @Spec(oleh): https://www.rfc-editor.org/info/rfc2616/#section-5.1
 static sz ParseRequestLine(web_string_view Buffer,
                            web_http_method *Method,
                            web_string_view *Path,
                            web_http_version *Version) {
-    sz I;
-    for (I = 0; I < Buffer.Count; ++I) {
-        if (Buffer.Items[I] == ' ') break;
-    }
+    sz ParseOffset;
 
-    if (I >= Buffer.Count) {
+    web_string_view RequestMethodSv = {0};
+    if (!ReadRequestLineChunk(Buffer, &ParseOffset, &RequestMethodSv)) {
         return -1;
     }
 
     web_http_method RequestMethod;
-    web_string_view RequestMethodSv = {.Items = Buffer.Items, .Count = I};
     if (!ParseHTTPMethod(RequestMethodSv, &RequestMethod)) {
         return -1;
     }
 
-    // 1.2. Request URI. (https://datatracker.ietf.org/doc/html/rfc2616#section-5.1.2)
+    // @Spec(oleh): https://datatracker.ietf.org/doc/html/rfc2616#section-5.1.2
     // FIXME(oleh): Actually parse URI's.
 
-    uz PathStart = I + 1;
-
-    for (I = PathStart; I < Buffer.Count; ++I) {
-        if (Buffer.Items[I] == ' ') break;
-    }
-
-    if (I >= Buffer.Count) {
+    web_string_view RequestPath = {0};
+    if (!ReadRequestLineChunk(Buffer, &ParseOffset, &RequestPath)) {
         return -1;
     }
 
-    web_string_view RequestPath = {.Items = Buffer.Items + PathStart, .Count = I - PathStart};
+    uz VersionStart = ParseOffset + 1;
 
-    // 1.3. HTTP version.
-
-    uz VersionStart = I + 1;
-
-    for (I = VersionStart; I < Buffer.Count; ++I) {
-        if (Buffer.Items[I] == '\r') break;
+    for (ParseOffset = VersionStart; ParseOffset < Buffer.Count - 1; ++ParseOffset) {
+        if (Buffer.Items[ParseOffset] == '\r' && Buffer.Items[ParseOffset + 1] == '\n') break;
     }
 
-    if (I >= Buffer.Count) {
+    if (ParseOffset >= Buffer.Count - 1) {
         return -1;
     }
 
     web_http_version RequestVersion;
-    web_string_view VersionSv = {.Items = Buffer.Items + VersionStart, .Count = I - VersionStart};
+    web_string_view RequestVersionSv = {.Items = Buffer.Items + VersionStart, .Count = ParseOffset - VersionStart};
 
-    if (!ParseHTTPVersion(VersionSv, &RequestVersion)) return -1;
-
-    // 1.4. CRLF.
-
-    if (Buffer.Count - I <= 1) {
-        return -1;
-    }
-
-    u8 NewlineChar = Buffer.Items[I + 1];
-    if (NewlineChar != '\n') {
+    if (!ParseHTTPVersion(RequestVersionSv, &RequestVersion)) {
         return -1;
     }
 
@@ -407,7 +483,7 @@ static sz ParseRequestLine(web_string_view Buffer,
     *Path = RequestPath;
     *Version = RequestVersion;
 
-    return I + 2;
+    return ParseOffset + 2;
 }
 
 b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_request *OutRequest, web_string_view *Error) {
@@ -671,7 +747,7 @@ End:
     return Result;
 }
 
-static const char *GetHttpResponseStatusReasonPhrase(web_http_response_status Status) {
+static const char *GetHTTPResponseStatusReasonPhrase(web_http_response_status Status) {
     switch (Status) {
 #define X(Status, _Code, Phrase) case HTTP_STATUS_##Status: return Phrase;
         WEB_ENUM_HTTP_RESPONSE_STATUSES
@@ -819,8 +895,8 @@ static void ServerWorker(void *Arg) {
         web_http_response_status ResponseStatus = Handler(Ctx);
 
         // 1. Status line. (https://datatracker.ietf.org/doc/html/rfc2616#section-6.1)
-        const char *ReasonPhrase = GetHttpResponseStatusReasonPhrase(ResponseStatus);
-        const char *VersionString = HttpVersionStrings[HttpRequest.Version];
+        const char *ReasonPhrase = GetHTTPResponseStatusReasonPhrase(ResponseStatus);
+        web_string_view VersionString = GetHTTPVersionString(&Ctx->Arena, HttpRequest.Version);
 
         web_dynamic_string ResponseHeadersString;
         WEB_ARRAY_INIT(&Ctx->Arena, &ResponseHeadersString);
@@ -828,8 +904,8 @@ static void ServerWorker(void *Arg) {
         HttpHeadersFormat(&Ctx->Arena, &ResponseHeadersString, Ctx->ResponseHeaders);
 
         web_string_view ResponseString = WebArenaFormat(&Ctx->Arena,
-                                                        "%s %u %s\r\nAccess-Control-Allow-Origin: *\r\n" WEB_SV_FMT "\r\n" WEB_SV_FMT,
-                                                        VersionString,
+                                                        WEB_SV_FMT "%u %s\r\nAccess-Control-Allow-Origin: *\r\n" WEB_SV_FMT "\r\n" WEB_SV_FMT,
+                                                        WEB_SV_ARG(VersionString),
                                                         ResponseStatus,
                                                         ReasonPhrase,
                                                         WEB_SV_ARG(ResponseHeadersString),
@@ -842,13 +918,13 @@ static void ServerWorker(void *Arg) {
     }
 
     web_http_response_status ResponseStatus = HTTP_STATUS_NOT_FOUND;
-    const char *ReasonPhrase = GetHttpResponseStatusReasonPhrase(ResponseStatus);
-    const char *VersionString = HttpVersionStrings[HttpRequest.Version];
+    const char *ReasonPhrase = GetHTTPResponseStatusReasonPhrase(ResponseStatus);
+    web_string_view VersionString = GetHTTPVersionString(&Ctx->Arena, HttpRequest.Version);
 
     // TODO(oleh): No handler found, just give em 404!
     web_string_view ResponseString = WebArenaFormat(&Ctx->Arena,
-                                                    "%s %u %s\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
-                                                    VersionString,
+                                                    WEB_SV_FMT "%u %s\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
+                                                    WEB_SV_ARG(VersionString),
                                                     ResponseStatus,
                                                     ReasonPhrase);
 

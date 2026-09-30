@@ -40,7 +40,7 @@
 
 #define WEB_SV_FMT "%.*s"
 #define WEB_SV_ARG(Sv) (int)(Sv).Count, (const char *)(Sv).Items
-#define WEB_SV_LIT(Lit) ((web_string_view){.Items = (u8 *)(Lit), .Count = strlen(Lit)})
+#define WEB_SV_LIT(Lit) ((web_string_view){.Items = (u8 *)(Lit), .Count = (sz)strlen(Lit)})
 
 #define WEB_UNREACHABLE() WEB_PANIC("Encountered unreachable code!")
 
@@ -92,25 +92,38 @@ typedef struct {
     sz Capacity;
 } web_dynamic_string;
 
-static inline b32 WebStringViewEqualCStr(web_string_view Sv, const char *CStr) {
-    sz CStrLength = strlen(CStr);
-    if (Sv.Count != CStrLength) return 0;
-
-    for (sz I = 0; I < Sv.Count; ++I) {
-        if (Sv.Items[I] != CStr[I]) return 0;
-    }
-
-    return 1;
+static inline s32 WebStringViewCompare(web_string_view Lhs, web_string_view Rhs) {
+    sz D = Lhs.Count - Rhs.Count;
+    if (D != 0) return D;
+    return memcmp(Lhs.Items, Rhs.Items, Lhs.Count);
 }
 
 static inline b32 WebStringViewEqual(web_string_view Lhs, web_string_view Rhs) {
-    if (Lhs.Count != Rhs.Count) return 0;
+    return WebStringViewCompare(Lhs, Rhs) == 0;
+}
 
-    for (sz I = 0; I < Lhs.Count; ++I) {
-        if (Lhs.Items[I] != Rhs.Items[I]) return 0;
-    }
+static inline b32 WebStringViewEqualCStr(web_string_view Sv, const char *CStr) {
+    return WebStringViewEqual(Sv, WEB_SV_LIT(CStr));
+}
 
-    return 1;
+static inline b32 WebStringViewHasPrefix(web_string_view Sv, web_string_view Prefix) {
+    if (Prefix.Count == 0) return 1;
+    if (Sv.Count == 0 || Prefix.Count > Sv.Count) return 0;
+    return memcmp(Sv.Items, Prefix.Items, Prefix.Count) == 0;
+}
+
+static inline b32 WebStringViewHasPrefixCStr(web_string_view Sv, const char *Prefix) {
+    return WebStringViewHasPrefix(Sv, WEB_SV_LIT(Prefix));
+}
+
+static inline b32 WebStringViewHasSuffix(web_string_view Sv, web_string_view Suffix) {
+    if (Suffix.Count == 0) return 1;
+    if (Sv.Count == 0 || Suffix.Count > Sv.Count) return 0;
+    return memcmp(Sv.Items + Sv.Count - Suffix.Count, Suffix.Items, Suffix.Count) == 0;
+}
+
+static inline b32 WebStringViewHasSuffixCStr(web_string_view Sv, const char *Suffix) {
+    return WebStringViewHasSuffix(Sv, WEB_SV_LIT(Suffix));
 }
 
 typedef struct {

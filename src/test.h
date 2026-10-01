@@ -43,10 +43,16 @@ void WebTestRunnerSetFail(
 
 #define WEB_TEST_HANDLER_SIG(H) b32 H(void)
 
+#ifdef WEB_BUILD_TYPE_RELEASE
+#    define WEB_TEST_HANDLER_LINKAGE static
+#else
+#    define WEB_TEST_HANDLER_LINKAGE extern
+#endif // WEB_BUILD_TYPE_RELEASE
+
 #define WEB_DEFINE_TEST(Name) \
     static void WEB_TEST_CASE_IMPL_NAME(Name)(web_test_runner *Runner) WEB_ATTRIBUTE_MAYBE_UNUSED; \
-    WEB_TEST_HANDLER_SIG(WEB_TEST_CASE_RUN_NAME(Name)) WEB_ATTRIBUTE_MAYBE_UNUSED; \
-    b32 WEB_TEST_CASE_RUN_NAME(Name)(void) { \
+    WEB_TEST_HANDLER_LINKAGE WEB_TEST_HANDLER_SIG(WEB_TEST_CASE_RUN_NAME(Name)) WEB_ATTRIBUTE_MAYBE_UNUSED; \
+    WEB_TEST_HANDLER_LINKAGE WEB_TEST_HANDLER_SIG(WEB_TEST_CASE_RUN_NAME(Name)) { \
         web_test_runner Runner = {0}; \
         WebTestRunnerInit(&Runner); \
         WebTestRunnerExecute(&Runner, WEB_SV_LIT(#Name), WEB_TEST_CASE_IMPL_NAME(Name)); \

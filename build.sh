@@ -38,7 +38,7 @@ fi
 if [ "$OPT" = "debug" ]; then
     FLAGS=$FLAGS" -Og"
 else
-    FLAGS=$FLAGS" -O2"
+    FLAGS=$FLAGS" -O2 -DWEB_BUILD_TYPE_RELEASE"
 fi
 
 cc $FLAGS $SOURCES

@@ -4,7 +4,7 @@
 
 static FILE *LogDestination;
 static web_log_level LogLevel;
-static b32 LogSource = 1;
+static b32 IncludeSource = 1;
 
 static const char *LevelStrTable[N_WEB_LOG_LEVEL] = {
     #define X(Level) [WEB_LOG_LEVEL_##Level] = #Level,
@@ -20,9 +20,11 @@ static const char *ScopeStrTable[N_WEB_LOG_SCOPE] = {
 
 void WebLog(web_log_level Level,
             web_log_scope Scope,
-            web_log_source_info Source,
+            web_source_info Source,
             const char *Fmt,
             ...) {
+    if (LogDestination == NULL) return;
+
     if (Level < LogLevel) return;
 
     va_list Args = {0};
@@ -42,7 +44,7 @@ void WebLog(web_log_level Level,
     const char *LevelStr = LevelStrTable[Level];
     const char *ScopeStr = ScopeStrTable[Scope];
 
-    if (LogSource) {
+    if (IncludeSource) {
         fprintf(LogDestination,
                 "[%s][%s] <%s:%d(%s)> %s\n",
                 LevelStr,
@@ -67,5 +69,5 @@ void WebLogSetDestination(FILE *Dest) {
 }
 
 void WebLogSetIncludeSource(b32 Value) {
-    LogSource = Value;
+    IncludeSource = Value;
 }

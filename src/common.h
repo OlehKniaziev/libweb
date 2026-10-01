@@ -28,15 +28,13 @@
 
 #define WEB_STRUCT_ZERO(Ptr) WEB_MEMORY_ZERO((Ptr), sizeof(*(Ptr)))
 
-#define WEB_PANIC(Msg) do {                                                 \
-        fprintf(stderr, "%s:%d: PROGRAM PANICKED: %s\n", __FILE__, __LINE__, Msg); \
+#define WEB_PANIC_FMT_SOURCE(Source, Fmt, ...) do {                                        \
+        fprintf(stderr, "%s:%d: PROGRAM PANICKED: " Fmt "\n", (Source).FileName, (Source).Line, __VA_ARGS__); \
         abort();                                                    \
     } while (0)
 
-#define WEB_PANIC_FMT(Fmt, ...) do {                                        \
-        fprintf(stderr, "%s:%d: PROGRAM PANICKED: " Fmt "\n", __FILE__, __LINE__, __VA_ARGS__); \
-        abort();                                                    \
-    } while (0)
+#define WEB_PANIC_FMT(Fmt, ...) WEB_PANIC_FMT_SOURCE(WEB_SOURCE_INFO_GET(), Fmt, __VA_ARGS__)
+#define WEB_PANIC(Msg) WEB_PANIC_FMT("%s", (Msg))
 
 #define WEB_SV_FMT "%.*s"
 #define WEB_SV_ARG(Sv) (int)(Sv).Count, (const char *)(Sv).Items
@@ -80,6 +78,14 @@ typedef double f64;
 
 typedef size_t uz;
 typedef ssize_t sz;
+
+typedef struct {
+    const char *FileName;
+    const char *ProcName;
+    u32 Line;
+} web_source_info;
+
+#define WEB_SOURCE_INFO_GET() ((web_source_info) {.FileName = __FILE__, .ProcName = __FUNCTION__, .Line = __LINE__})
 
 typedef struct {
     u8 *Items;
@@ -126,6 +132,9 @@ static inline b32 WebStringViewHasSuffixCStr(web_string_view Sv, const char *Suf
     return WebStringViewHasSuffix(Sv, WEB_SV_LIT(Suffix));
 }
 
+web_string_view WebStringViewChop(web_string_view Sv, web_string_view Delimiter);
+web_string_view WebStringViewChopCStr(web_string_view Sv, const char *Delimiter);
+
 typedef struct {
     u8 *Items;
     void *LastAlloc;
@@ -168,8 +177,10 @@ void WebArenaInitChained(web_arena *Arena, uz Capacity);
 
 #ifdef __GNUC__
 #    define WEB_ATTRIBUTE_PRINTF(Fmt, Args) __attribute__((format(printf, Fmt, Args)))
+#    define WEB_ATTRIBUTE_MAYBE_UNUSED __attribute__((unused))
 #else
 #    define WEB_ATTRIBUTE_PRINTF(Fmt, Args)
+#    define WEB_ATTRIBUTE_MAYBE_UNUSED
 #endif // __GNUC__
 
 web_string_view WebArenaFormat(web_arena *Arena, const char *Fmt, ...) WEB_ATTRIBUTE_PRINTF(2, 3);

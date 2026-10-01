@@ -1,4 +1,5 @@
 #include "utf.h"
+#include "test.h"
 
 enum {
     UTF8_2_MASK = 0xC0,
@@ -153,4 +154,58 @@ End:
     if (NumWritten != NULL) *NumWritten = OutputCursor;
 
     return Result;
+}
+
+#define CODE_POINT_A 0x0430
+#define CODE_POINT_B 0x0431
+
+WEB_DEFINE_TEST(UTF8Encoding) {
+    web_utf8_stream Stream = {
+        .View = WEB_SV_LIT("аб"),
+    };
+
+    web_code_point PointA = 0;
+    WEB_T_TRUE(WebUTF8StreamNext(&Stream, &PointA));
+    WEB_T_EQUAL(PointA, CODE_POINT_A);
+
+    web_code_point PointB = 0;
+    WEB_T_TRUE(WebUTF8StreamNext(&Stream, &PointB));
+    WEB_T_EQUAL(PointB, CODE_POINT_B);
+
+    WEB_T_TRUE(!WebUTF8StreamNext(&Stream, NULL));
+}
+
+WEB_DEFINE_TEST(UTF8Decoding) {
+    web_code_point CodePoints[] = {
+        CODE_POINT_A,
+        CODE_POINT_B,
+    };
+    sz CodePointsCount = sizeof(CodePoints)/sizeof(*CodePoints);
+
+    u8 Output[4] = {0};
+    sz OutputCount = sizeof(Output)/sizeof(*Output);
+
+    sz NumWritten = 0;
+
+    WEB_T_TRUE(WebUTF8Encode(CodePoints, CodePointsCount, Output, OutputCount, &NumWritten));
+
+    WEB_T_EQUAL((s32)NumWritten, 4);
+    WEB_T_EQUAL(Output[0], 0xC0 | (CODE_POINT_A >> 6));
+    WEB_T_EQUAL(Output[1], 0x80 | (CODE_POINT_A & 0x3F));
+    WEB_T_EQUAL(Output[2], 0xC0 | (CODE_POINT_B >> 6));
+    WEB_T_EQUAL(Output[3], 0x80 | (CODE_POINT_B & 0x3F));
+
+    web_string_view Input = {.Items = Output, .Count = OutputCount};
+
+    web_utf8_stream Stream = {.View = Input};
+
+    web_code_point PointA = 0;
+    WEB_T_TRUE(WebUTF8StreamNext(&Stream, &PointA));
+    WEB_T_EQUAL(PointA, CODE_POINT_A);
+
+    web_code_point PointB = 0;
+    WEB_T_TRUE(WebUTF8StreamNext(&Stream, &PointB));
+    WEB_T_EQUAL(PointB, CODE_POINT_B);
+
+    WEB_T_TRUE(!WebUTF8StreamNext(&Stream, NULL));
 }

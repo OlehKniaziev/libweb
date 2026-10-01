@@ -29,7 +29,8 @@ typedef enum {
     X(TLS) \
     X(COMMON) \
     X(JSON) \
-    X(BASE64)
+    X(BASE64) \
+    X(TEST)
 
 typedef enum {
     #define X(Scope) WEB_LOG_SCOPE_##Scope,
@@ -38,13 +39,7 @@ typedef enum {
     N_WEB_LOG_SCOPE,
 } web_log_scope;
 
-typedef struct {
-    const char *FileName;
-    const char *ProcName;
-    u32 Line;
-} web_log_source_info;
-
-#define WEB_LOG_FMT(Level, Scope, Fmt, ...) (WebLog(WEB_LOG_LEVEL_##Level, WEB_LOG_SCOPE_##Scope, (web_log_source_info) {.FileName = __FILE__, .ProcName = __FUNCTION__, .Line = __LINE__}, (Fmt), __VA_ARGS__))
+#define WEB_LOG_FMT(Level, Scope, Fmt, ...) (WebLog(WEB_LOG_LEVEL_##Level, WEB_LOG_SCOPE_##Scope, WEB_SOURCE_INFO_GET(), (Fmt), __VA_ARGS__))
 #define WEB_LOG(Level, Scope, Msg) WEB_LOG_FMT(Level, Scope, "%s", (Msg))
 
 #define WEB_LOG_FATAL_FMT(Fmt, ...) do { \
@@ -55,9 +50,9 @@ typedef struct {
 
 void WebLog(web_log_level Level,
             web_log_scope Scope,
-            web_log_source_info Source,
+            web_source_info Source,
             const char *Fmt,
-            ...);
+            ...) WEB_ATTRIBUTE_PRINTF(4, 5);
 
 void WebLogSetDestination  (FILE *);
 void WebLogSetLevel        (web_log_level);

@@ -1,6 +1,7 @@
 #include <math.h>
 
 #include "json.h"
+#include "test.h"
 #include "utf.h"
 
 typedef enum {
@@ -657,3 +658,56 @@ void WebJsonPrepareArrayElement(web_json_writer WriterPtr) {
         WriteChar(Writer, ',');
     }
 }
+
+WEB_DEFINE_TEST(JsonEncoding_StringEscaping) {
+    web_json_writer Writer = WebJsonBegin(&Runner->Arena, 0);
+    WebJsonBeginObject(Writer);
+
+    WebJsonPutKey(Writer, WEB_SV_LIT("\r\nhello\""));
+    WebJsonPutString(Writer, WEB_SV_LIT("\"\b\t\f\\world\""));
+
+    WebJsonEndObject(Writer);
+    web_string_view Json = WebJsonEnd(Writer);
+
+    WEB_T_EQUAL(Json, WEB_SV_LIT("{\"\\r\\nhello\\\"\":\"\\\"\\b\\t\\f\\\\world\\\"\"}"));
+}
+
+WEB_DEFINE_TEST(JsonEncoding_Unicode) {
+    web_json_writer Writer = WebJsonBegin(&Runner->Arena, WEB_JSON_ESCAPE_UNICODE);
+    WebJsonPutString(Writer, WEB_SV_LIT("аб"));
+    WEB_T_EQUAL(WebJsonEnd(Writer), WEB_SV_LIT("\"\\u0430\\u0431\""));
+}
+
+WEB_DEFINE_TEST(JsonDecoding_Escaping) {
+    web_string_view Input = WEB_SV_LIT("\"\\\"v\\ra\\nl\\tu\\be\\f\\\\\\\"\"");
+    web_json_value Value = {};
+
+    WEB_T_TRUE(WebJsonParse(&Runner->Arena, Input, &Value));
+    WEB_T_TRUE(Value.Type == JSON_STRING);
+
+    web_string_view S = Value.String;
+
+    WEB_T_EQUAL(S, WEB_SV_LIT("\"v\ra\nl\tu\be\f\\\""));
+}
+
+WEB_DEFINE_TEST(JsonDecoding_Unicode) {
+    web_string_view Input = WEB_SV_LIT("\"\\u0430\\u0431\"");
+    web_json_value Value = {};
+
+    WEB_T_TRUE(WebJsonParse(&Runner->Arena, Input, &Value));
+    WEB_T_TRUE(Value.Type == JSON_STRING);
+
+    web_string_view S = Value.String;
+
+    WEB_T_EQUAL(S, WEB_SV_LIT("аб"));
+
+    Input = WEB_SV_LIT("\"\\uD83D\\uDE80\"");
+
+    WEB_T_TRUE(WebJsonParse(&Runner->Arena, Input, &Value));
+    WEB_T_TRUE(Value.Type == JSON_STRING);
+
+    S = Value.String;
+
+    WEB_T_EQUAL(S, WEB_SV_LIT("🚀"));
+}
+

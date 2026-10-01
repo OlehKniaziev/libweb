@@ -2,6 +2,9 @@
 
 set -xe
 
+./build.sh -de
 ./build.sh -e
-cc -ggdb -O0 -Wall -Wextra -Werror -pedantic -o test tests/test.c -lweb -L. $(pkg-config --cflags --libs openssl)
-./test
+TEST_CASES=`nm -jg libweb.so | grep --color=never '^WEB_TEST_CASE.*_RUN$' | tr '\n' ','`
+
+cc -ggdb -O0 -Wall -Wextra -Werror -o test tests/test.c -L. -l:libweb.a
+./test $TEST_CASES

@@ -5,7 +5,7 @@ set -xe
 FLAGS="-g -Wall -Wextra -Werror -fpic"
 BUILDTYPE=static
 OPT=debug
-SOURCES="src/http.c src/json.c src/common.c src/base64.c src/threadpool.c src/log.c src/pool.c src/utf.c"
+SOURCES="src/http.c src/json.c src/common.c src/base64.c src/threadpool.c src/log.c src/pool.c src/utf.c src/test.c"
 
 while getopts "dezr" flag; do
     case $flag in

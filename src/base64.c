@@ -1,4 +1,5 @@
 #include "base64.h"
+#include "test.h"
 
 #define BASE64_TABLE_SIZE 65
 
@@ -186,4 +187,27 @@ void WebBase64Encode(web_string_view InputBuffer, u8 *OutputBuffer, uz *OutputBu
 
 End:
     *OutputBufferCount = OutputCount;
+}
+
+WEB_DEFINE_TEST(Base64Conversion) {
+    web_string_view Input = WEB_SV_LIT("Many hands make light work.");
+
+    uz BufferCount = 100;
+    u8 Buffer[BufferCount];
+    WebBase64Encode(Input, Buffer, &BufferCount);
+
+    web_string_view Encoded;
+    Encoded.Items = Buffer;
+    Encoded.Count = BufferCount;
+
+    WEB_T_EQUAL(Encoded, WEB_SV_LIT("TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu"));
+    uz DBufferCount = Encoded.Count;
+    u8 DBuffer[DBufferCount];
+    WEB_T_TRUE(WebBase64Decode(Encoded, DBuffer, &DBufferCount));
+
+    web_string_view Decoded;
+    Decoded.Items = DBuffer;
+    Decoded.Count = DBufferCount;
+
+    WEB_T_EQUAL(Decoded, Input);
 }

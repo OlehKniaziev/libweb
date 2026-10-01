@@ -1,4 +1,5 @@
 #include "http.h"
+#include "test.h"
 #include "threadpool.h"
 #include "log.h"
 
@@ -442,7 +443,7 @@ static sz ParseRequestLine(web_string_view Buffer,
                            web_http_method *Method,
                            web_string_view *Path,
                            web_http_version *Version) {
-    sz ParseOffset;
+    sz ParseOffset = 0;
 
     web_string_view RequestMethodSv = {0};
     if (!ReadRequestLineChunk(Buffer, &ParseOffset, &RequestMethodSv)) {
@@ -462,7 +463,7 @@ static sz ParseRequestLine(web_string_view Buffer,
         return -1;
     }
 
-    uz VersionStart = ParseOffset + 1;
+    uz VersionStart = ParseOffset;
 
     for (ParseOffset = VersionStart; ParseOffset < Buffer.Count - 1; ++ParseOffset) {
         if (Buffer.Items[ParseOffset] == '\r' && Buffer.Items[ParseOffset + 1] == '\n') break;
@@ -1159,4 +1160,40 @@ void WebHttpContextAddHeader(web_http_response_context *Ctx, web_string_view Nam
 
 void WebHttpResponseWrite(web_http_response_context *Ctx, web_string_view Response) {
     Ctx->Content = Response;
+}
+
+// Tests
+WEB_DEFINE_TEST(ParseHTTPVersionKnown) {
+    web_string_view Input = WEB_SV_LIT("HTTP/1.1");
+
+    web_http_version Version = {0};
+    WEB_T_TRUE(ParseHTTPVersion(Input, &Version));
+
+    WEB_T_EQUAL(Version.Major, 1);
+    WEB_T_EQUAL(Version.Minor, 1);
+    WEB_T_EQUAL(Version.Number, WEB_MAKE_HTTP_NUMBER(1, 1));
+}
+
+WEB_DEFINE_TEST(ParseHTTPVersionBig) {
+    web_string_view Input = WEB_SV_LIT("HTTP/20.26");
+
+    web_http_version Version = {0};
+    WEB_T_TRUE(ParseHTTPVersion(Input, &Version));
+
+    WEB_T_EQUAL(Version.Major, 20);
+    WEB_T_EQUAL(Version.Minor, 26);
+}
+
+WEB_DEFINE_TEST(ParseRequestLineOK) {
+    web_string_view RequestLine = WEB_SV_LIT("GET /index.html HTTP/1.1\r\n");
+
+    web_http_method Method;
+    web_string_view Path;
+    web_http_version Version;
+
+    WEB_T_NEQUAL(ParseRequestLine(RequestLine, &Method, &Path, &Version), -1);
+
+    WEB_T_EQUAL(Method, HTTP_GET);
+    WEB_T_EQUAL(Path, WEB_SV_LIT("/index.html"));
+    WEB_T_EQUAL(Version.Number, HTTP_1_1);
 }

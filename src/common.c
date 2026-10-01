@@ -312,3 +312,24 @@ web_string_view WebArenaFormat(web_arena *Arena, const char *Fmt, ...) {
     return Result;
 }
 
+web_string_view WebStringViewChop(web_string_view Sv, web_string_view Delimiter) {
+    if (Delimiter.Count > Sv.Count) {
+        return WEB_SV_LIT("");
+    }
+
+    for (sz CharIdx = 0; CharIdx <= Sv.Count - Delimiter.Count; ++CharIdx) {
+        web_string_view Chunk = {.Items = Sv.Items + CharIdx, .Count = Delimiter.Count};
+        if (WebStringViewEqual(Chunk, Delimiter)) {
+            return (web_string_view){
+                .Items = Sv.Items,
+                .Count = CharIdx,
+            };
+        }
+    }
+
+    return WEB_SV_LIT("");
+}
+
+web_string_view WebStringViewChopCStr(web_string_view Sv, const char *Delimiter) {
+    return WebStringViewChop(Sv, WEB_SV_LIT(Delimiter));
+}

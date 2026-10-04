@@ -200,6 +200,10 @@ static void InsertPotentiallyCommaSeparatedHeaderValue(
     }
 }
 
+static b32 IsLWS(u8 C) {
+    return C == ' ' || C == '\t';
+}
+
 static sz ParseHeader(
         u8 *Buffer,
         sz BufferCount,
@@ -218,10 +222,21 @@ static sz ParseHeader(
 
     *HeaderName = (web_string_view){.Items = Buffer, .Count = I};
 
-    uz HeaderValueStart = I + 2;
+    I += 1;
+
+    for (; I < BufferCount; ++I) {
+        if (!IsLWS(Buffer[I])) break;
+    }
+
+    sz HeaderValueStart = I;
 
     for (I = HeaderValueStart; I < BufferCount; ++I) {
-        if (Buffer[I] == '\r') break;
+        u8 Char = Buffer[I];
+        if (IsLWS(Char) || Char == '\r') break;
+    }
+
+    for (; I < BufferCount; ++I) {
+        if (!IsLWS(Buffer[I])) break;
     }
 
     if (I >= BufferCount) {

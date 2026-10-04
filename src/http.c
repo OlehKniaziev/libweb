@@ -395,6 +395,13 @@ static b32 ParseStatusCode(web_string_view Buffer, web_http_response_status *Sta
 WEB_ENUM_HTTP_RESPONSE_STATUSES
 #undef X
 
+    WEB_LOG_FMT(
+            DEBUG,
+            HTTP,
+            "Unsupported status code %ld",
+            StatusCodeNum
+    );
+
     return 0;
 }
 
@@ -406,11 +413,11 @@ static sz ParseStatusLine(web_string_view Buffer,
         if (Buffer.Items[I] == ' ') break;
     }
 
-    if (I >= Buffer.Count) return 0;
+    if (I >= Buffer.Count) return -1;
 
     web_string_view HttpVersionSv = {.Items = Buffer.Items, .Count = I};
 
-    if (!ParseHTTPVersion(HttpVersionSv, Version)) return 0;
+    if (!ParseHTTPVersion(HttpVersionSv, Version)) return -1;
 
     uz StatusCodeStart = I + 1;
 
@@ -418,23 +425,20 @@ static sz ParseStatusLine(web_string_view Buffer,
         if (Buffer.Items[I] == ' ') break;
     }
 
-    if (I >= Buffer.Count) return 0;
+    if (I >= Buffer.Count) return -1;
 
     web_string_view StatusCodeSv = {.Items = Buffer.Items + StatusCodeStart, .Count = I - StatusCodeStart};
 
-    if (!ParseStatusCode(StatusCodeSv, StatusCode)) return 0;
+    if (!ParseStatusCode(StatusCodeSv, StatusCode)) return -1;
 
     sz ReasonStart = I + 1;
     for (I = ReasonStart; I < Buffer.Count; ++I) {
         if (Buffer.Items[I] == '\r') break;
     }
 
-    ++I;
-    if (I >= Buffer.Count) return 0;
+    if (I + 1 >= Buffer.Count || Buffer.Items[I + 1] != '\n') return -1;
 
-    if (Buffer.Items[I] != '\n') return 0;
-
-    return I + 1;
+    return I + 2;
 }
 
 b32 WebHttpResponseParse(web_arena *Arena, web_string_view Buffer, web_http_response *OutResponse) {

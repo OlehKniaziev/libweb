@@ -356,6 +356,7 @@ typedef struct {
     do { \
         web_map_meta Meta = (Map)->Meta[KeyIdx]; \
         if (Meta.Flags & WEB_MAP_META_OCCUPIED) { \
+            key_type Key = (Map)->Keys[KeyIdx]; \
             if (EqP(GetKey, Key)) { \
                 if (OutValue != NULL) *OutValue = (Map)->Values[KeyIdx]; \
                 Result = 1; \

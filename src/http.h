@@ -40,16 +40,27 @@ typedef enum {
 #undef X
 } web_http_method;
 
-typedef struct {
-    web_string_view Name;
-    web_string_view Value;
-} web_http_header;
+typedef WEB_ARRAY_TYPE(web_string_view) web_http_header_value;
 
 typedef struct {
-    web_http_header *Items;
-    sz Count;
-    sz Capacity;
-} web_http_headers;
+    web_string_view Name;
+    web_http_header_value Value;
+} web_http_header;
+
+typedef WEB_MAP_TYPE(web_string_view, web_http_header_value) web_http_headers;
+
+b32 WebHttpHeadersGet(
+        const web_http_headers *Headers,
+        web_string_view Name,
+        web_http_header *Header
+);
+
+void WebHttpHeadersAdd(
+        web_arena *Arena,
+        web_http_headers *Headers,
+        web_string_view Name,
+        web_string_view Value
+);
 
 #define WEB_ENUM_HTTP_VERSIONS \
     X(1, 0, "HTTP/1.0") \

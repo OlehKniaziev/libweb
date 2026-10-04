@@ -1,4 +1,5 @@
 #include "http.h"
+#include "https.h"
 #include "test.h"
 #include "threadpool.h"
 #include "log.h"
@@ -64,19 +65,31 @@ static sz HttpReceive(worker_data *WorkerData, u8 *Buffer, uz BufferCapacity) {
     }
 }
 
-static void HttpHeadersFormat(web_arena *Arena, web_dynamic_string *String, web_http_headers Headers) {
-    for (sz HeaderIndex = 0; HeaderIndex < Headers.Count; ++HeaderIndex) {
-        web_http_header Header = Headers.Items[HeaderIndex];
+static web_http_header HeaderAt(web_http_headers *Headers, sz Idx) {
+    WEB_ASSERT(Idx < Headers->Capacity);
+    return (web_http_header){.Name = Headers->Keys[Idx], .Value = Headers->Values[Idx]};
+}
 
-        for (sz I = 0; I < Header.Name.Count; ++I) {
-            WEB_ARRAY_PUSH(Arena, String, Header.Name.Items[I]);
+static void HttpHeadersFormat(web_arena *Arena, web_dynamic_string *String, web_http_headers Headers) {
+    WEB_MAP_FOREACH(&Headers, HeaderIdx) {
+        web_string_view HeaderName = Headers.Keys[HeaderIdx];
+        web_http_header_value HeaderValue = Headers.Values[HeaderIdx];
+
+        for (sz I = 0; I < HeaderName.Count; ++I) {
+            WEB_ARRAY_PUSH(Arena, String, HeaderName.Items[I]);
         }
 
         WEB_ARRAY_PUSH(Arena, String, ':');
         WEB_ARRAY_PUSH(Arena, String, ' ');
 
-        for (sz I = 0; I < Header.Value.Count; ++I) {
-            WEB_ARRAY_PUSH(Arena, String, Header.Value.Items[I]);
+        for (sz I = 0; I < HeaderValue.Count - 1; ++I) {
+            WEB_ARRAY_EXTEND(Arena, String, &HeaderValue.Items[I]);
+            WEB_ARRAY_PUSH(Arena, String, ',');
+        }
+
+        if (HeaderValue.Count > 0) {
+            web_string_view LastValue = HeaderValue.Items[HeaderValue.Count - 1];
+            WEB_ARRAY_EXTEND(Arena, String, &LastValue);
         }
 
         WEB_ARRAY_PUSH(Arena, String, '\r');
@@ -145,7 +158,7 @@ static int HttpsConnect(web_https_provider *Provider, int Sock, web_https_sessio
     WEB_CASE_PROVIDER_OPENSSL({
         SSL *Ssl = PrepareOpenSSLSession(Provider, Sock, Sess);
         return SSL_connect(Ssl);
-    });
+    })
     case WEB_HTTPS_PROVIDER_CUSTOM: {
         web_https_custom_provider *Custom = (web_https_custom_provider *) Provider->Data;
         return Custom->VTable.Connect(Custom->Data, Sock, Sess);
@@ -170,10 +183,30 @@ static int HttpsAcceptConnection(web_https_provider *Provider, int Sock, web_htt
     WEB_UNREACHABLE();
 }
 
-static sz HttpRequestParseHeader(u8 *Buffer,
-                                 uz BufferCount,
-                                 web_http_header *Header) {
-    uz I = 0;
+static void InsertPotentiallyCommaSeparatedHeaderValue(
+        web_arena *Arena,
+        web_http_headers *Headers,
+        web_string_view Name,
+        web_string_view Value
+) {
+    web_string_view Delim = WEB_SV_LIT(",");
+
+    while (Value.Count > 0) {
+        web_string_view Part = WebStringViewChop(Value, Delim);
+        WebHttpHeadersAdd(Arena, Headers, Name, Part);
+
+        Value.Count -= Part.Count + Delim.Count;
+        Value.Items += Part.Count + Delim.Count;
+    }
+}
+
+static sz ParseHeader(
+        u8 *Buffer,
+        sz BufferCount,
+        web_string_view *HeaderName,
+        web_string_view *HeaderValue
+) {
+    sz I = 0;
 
     for (; I < BufferCount; ++I) {
         if (Buffer[I] == ':') break;
@@ -183,7 +216,7 @@ static sz HttpRequestParseHeader(u8 *Buffer,
         return -1;
     }
 
-    Header->Name = (web_string_view) {.Items = Buffer, .Count = I};
+    *HeaderName = (web_string_view){.Items = Buffer, .Count = I};
 
     uz HeaderValueStart = I + 2;
 
@@ -204,7 +237,7 @@ static sz HttpRequestParseHeader(u8 *Buffer,
         return -1;
     }
 
-    Header->Value = (web_string_view) {.Items = Buffer + HeaderValueStart, .Count = I - HeaderValueStart};
+    *HeaderValue = (web_string_view){.Items = Buffer + HeaderValueStart, .Count = I - HeaderValueStart};
 
     return I + 2;
 }
@@ -213,23 +246,45 @@ static sz HttpRequestParseHeader(u8 *Buffer,
 static sz ParseHeaders(web_arena *Arena,
                        web_string_view Buffer,
                        web_http_headers *Headers) {
-    for (sz I = 0; I < Buffer.Count; ) {
-        if (Buffer.Items[I] == '\r' && Buffer.Count - I > 1 && Buffer.Items[I + 1] == '\n') {
-            return I + 2;
+    for (sz CharIdx = 0; CharIdx < Buffer.Count; ) {
+        if (Buffer.Items[CharIdx] == '\r' && Buffer.Count - CharIdx > 1 && Buffer.Items[CharIdx + 1] == '\n') {
+            return CharIdx + 2;
         }
 
-        web_http_header Header = {0};
-        sz N = HttpRequestParseHeader(Buffer.Items + I, Buffer.Count - I, &Header);
+        web_string_view HeaderName = {0};
+        web_string_view HeaderValue = {0};
+
+        sz N = ParseHeader(Buffer.Items + CharIdx, Buffer.Count - CharIdx, &HeaderName, &HeaderValue);
         if (N < 0) {
             return -1;
         }
 
-        I += N;
+        InsertPotentiallyCommaSeparatedHeaderValue(Arena, Headers, HeaderName, HeaderValue);
 
-        WEB_ARRAY_PUSH(Arena, Headers, Header);
+        CharIdx += N;
     }
 
     return -1;
+}
+
+void WebHttpHeadersAdd(web_arena *Arena, web_http_headers *Headers, web_string_view Name, web_string_view Value) {
+    web_http_header_value Values = {0};
+    if (!WEB_MAP_GET(Headers, Name, &Values)) {
+        WEB_ARRAY_INIT(Arena, &Values);
+    }
+
+    WEB_ARRAY_PUSH(Arena, &Values, Value);
+
+    WEB_MAP_INSERT(Arena, Headers, Name, Values);
+}
+
+b32 WebHttpHeadersGet(const web_http_headers *Headers, web_string_view Name, web_http_header *Header) {
+    if (WEB_MAP_GET(Headers, Name, &Header->Value)) {
+        Header->Name = Name;
+        return 1;
+    }
+
+    return 0;
 }
 
 static b32 ParseHTTPVersion_Fast(web_string_view Input, web_http_version *Version) {
@@ -379,7 +434,7 @@ b32 WebHttpResponseParse(web_arena *Arena, web_string_view Buffer, web_http_resp
     }
 
     web_http_headers Headers;
-    WEB_ARRAY_INIT(Arena, &Headers);
+    WEB_STRING_MAP_INIT(Arena, &Headers);
 
     Buffer.Items += I;
     Buffer.Count -= I;
@@ -507,7 +562,7 @@ b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_reque
     // FIXME(oleh): Actually parse the headers according to their specification.
 
     web_http_headers Headers;
-    WEB_ARRAY_INIT(Arena, &Headers);
+    WEB_STRING_MAP_INIT(Arena, &Headers);
 
     sz I = 0;
 
@@ -535,14 +590,29 @@ b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_reque
 #define CONTENT_LENGTH_HEADER "Content-Length"
 
 static void ParseContentLength(web_http_header Header, s64 *ContentLength) {
-    b32 Ok = WebParseS64(Header.Value, ContentLength);
+    if (Header.Value.Count != 1) {
+        WEB_LOG_FMT(
+                WARN,
+                HTTP,
+                "Expected the '" CONTENT_LENGTH_HEADER "' value to have 1 component, got %ld instead",
+                Header.Value.Count
+        );
+        goto Fail;
+    }
+
+    web_string_view ContentLengthString = Header.Value.Items[0];
+
+    b32 Ok = WebParseS64(ContentLengthString, ContentLength);
     if (!Ok) {
         WEB_LOG_FMT(WARN,
                     HTTP,
                     "Failed to parse received " CONTENT_LENGTH_HEADER "header value as an integer; value=" WEB_SV_FMT,
                     WEB_SV_ARG(Header.Value));
-        *ContentLength = -1;
+        goto Fail;
     }
+
+Fail:
+        *ContentLength = -1;
 }
 
 static b32 HttpResponseParseStreaming(worker_data *WorkerData, web_http_response *Resp) {
@@ -552,7 +622,7 @@ static b32 HttpResponseParseStreaming(worker_data *WorkerData, web_http_response
     web_http_response_status Code;
 
     web_http_headers Headers = {0};
-    WEB_ARRAY_INIT(Arena, &Headers);
+    WEB_STRING_MAP_INIT(Arena, &Headers);
 
     uz BufferCount = 0;
     uz BufferCapacity = 1024;
@@ -603,8 +673,8 @@ ReceiveLoop: ;
 
     ParseOffset += N;
 
-    for (sz HeaderIdx = 0; HeaderIdx < Headers.Count; ++HeaderIdx) {
-        web_http_header Header = Headers.Items[HeaderIdx];
+    WEB_MAP_FOREACH(&Headers, HeaderIdx) {
+        web_http_header Header = HeaderAt(&Headers, HeaderIdx);
         if (WebStringViewEqualCStr(Header.Name, CONTENT_LENGTH_HEADER)) {
             ParseContentLength(Header, &ContentLength);
         }
@@ -784,9 +854,10 @@ static b32 HttpRequestParseStreaming(worker_data *WorkerData,
     request_parse_state ParseState = PARSE_STATE_REQUEST_LINE;
 
     s64 ContentLength = -1;
-    web_http_header Header = {0};
+    web_string_view HeaderName = {0};
+    web_string_view HeaderValue = {0};
     web_http_headers Headers = {0};
-    WEB_ARRAY_INIT(Arena, &Headers);
+    WEB_STRING_MAP_INIT(Arena, &Headers);
 
 ReceiveLoop:
     if (BufferCount >= BufferCapacity) {
@@ -834,17 +905,19 @@ ParseHeaders:
             break;
         }
 
-        N = HttpRequestParseHeader(Buffer + ParseOffset, BufferCount - ParseOffset, &Header);
+        N = ParseHeader(Buffer + ParseOffset, BufferCount - ParseOffset, &HeaderName, &HeaderValue);
         if (N == -1) {
             WEB_LOG(ERROR, HTTP, "Failed to parse a request's header");
             return 0;
         }
 
+        InsertPotentiallyCommaSeparatedHeaderValue(Arena, &Headers, HeaderName, HeaderValue);
+
         ParseOffset += N;
 
-        WEB_ARRAY_PUSH(Arena, &Headers, Header);
-
-        if (WebStringViewEqualCStr(Header.Name, CONTENT_LENGTH_HEADER)) {
+        if (WebStringViewEqualCStr(HeaderName, CONTENT_LENGTH_HEADER)) {
+            web_http_header Header = {0};
+            WEB_ASSERT(WebHttpHeadersGet(&Headers, HeaderName, &Header));
             ParseContentLength(Header, &ContentLength);
         }
     }
@@ -875,7 +948,7 @@ static void ServerWorker(void *Arg) {
 
     WebArenaReset(&Ctx->Arena);
     Ctx->ResponseHeaders.Count = 0;
-    WEB_ARRAY_INIT(&Ctx->Arena, &Ctx->ResponseHeaders);
+    WEB_STRING_MAP_INIT(&Ctx->Arena, &Ctx->ResponseHeaders);
     Ctx->Content = (web_string_view) {0};
 
     web_http_request HttpRequest;
@@ -1048,8 +1121,7 @@ void WebHttpServerAttachHandler(web_http_server *Server, const char *Path, web_h
 
 static void HttpsInit(web_https_provider *Provider) {
     switch (Provider->Type) {
-#if WEB_USE_HTTPS_OPENSSL
-    case WEB_HTTPS_PROVIDER_OPENSSL: {
+    WEB_CASE_PROVIDER_OPENSSL({
         WEB_VERIFY(Provider->Data != NULL);
 
         web_https_openssl_provider_config *Conf = (web_https_openssl_provider_config *) Provider->Data;
@@ -1072,8 +1144,7 @@ static void HttpsInit(web_https_provider *Provider) {
         Provider->Data = SslCtx;
 
         return;
-    }
-#endif // WEB_USE_HTTPS_OPENSSL
+    })
     case WEB_HTTPS_PROVIDER_CUSTOM: {
         web_https_custom_provider *Custom = (web_https_custom_provider *) Provider->Data;
         Custom->VTable.Init(Custom->Data);
@@ -1151,11 +1222,7 @@ b32 WebHttpServerInit(web_http_context *Context, web_http_server *Server) {
 }
 
 void WebHttpContextAddHeader(web_http_response_context *Ctx, web_string_view Name, web_string_view Value) {
-    web_http_header Header = {
-        .Name = Name,
-        .Value = Value,
-    };
-    WEB_ARRAY_PUSH(&Ctx->Arena, &Ctx->ResponseHeaders, Header);
+    WebHttpHeadersAdd(&Ctx->Arena, &Ctx->ResponseHeaders, Name, Value);
 }
 
 void WebHttpResponseWrite(web_http_response_context *Ctx, web_string_view Response) {
@@ -1196,4 +1263,36 @@ WEB_DEFINE_TEST(ParseRequestLineOK) {
     WEB_T_EQUAL(Method, HTTP_GET);
     WEB_T_EQUAL(Path, WEB_SV_LIT("/index.html"));
     WEB_T_EQUAL(Version.Number, HTTP_1_1);
+}
+
+WEB_DEFINE_TEST(ParseHeaderListValue) {
+    web_string_view Request = WEB_SV_LIT("H1: a,b,c\r\nH2: a\r\nH2: b\r\nH2: c\r\nH3: a\r\n\r\n");
+
+    web_http_headers Headers = {0};
+    WEB_STRING_MAP_INIT(&Runner->Arena, &Headers);
+
+    WEB_T_NEQUAL(ParseHeaders(&Runner->Arena, Request, &Headers), -1);
+
+    web_http_header_value Value = {0};
+    WEB_T_TRUE(WEB_MAP_GET(&Headers, WEB_SV_LIT("H1"), &Value));
+
+    WEB_T_EQUAL(Value.Count, 3);
+
+    WEB_T_EQUAL(Value.Items[0], WEB_SV_LIT("a"));
+    WEB_T_EQUAL(Value.Items[1], WEB_SV_LIT("b"));
+    WEB_T_EQUAL(Value.Items[2], WEB_SV_LIT("c"));
+
+    WEB_T_TRUE(WEB_MAP_GET(&Headers, WEB_SV_LIT("H2"), &Value));
+
+    WEB_T_EQUAL(Value.Count, 3);
+
+    WEB_T_EQUAL(Value.Items[0], WEB_SV_LIT("a"));
+    WEB_T_EQUAL(Value.Items[1], WEB_SV_LIT("b"));
+    WEB_T_EQUAL(Value.Items[2], WEB_SV_LIT("c"));
+
+    WEB_T_TRUE(WEB_MAP_GET(&Headers, WEB_SV_LIT("H3"), &Value));
+
+    WEB_T_EQUAL(Value.Count, 1);
+
+    WEB_T_EQUAL(Value.Items[0], WEB_SV_LIT("a"));
 }

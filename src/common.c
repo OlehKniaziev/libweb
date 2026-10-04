@@ -315,7 +315,7 @@ web_string_view WebArenaFormat(web_arena *Arena, const char *Fmt, ...) {
 
 web_string_view WebStringViewChop(web_string_view Sv, web_string_view Delimiter) {
     if (Delimiter.Count > Sv.Count) {
-        return WEB_SV_LIT("");
+        return Sv;
     }
 
     for (sz CharIdx = 0; CharIdx <= Sv.Count - Delimiter.Count; ++CharIdx) {
@@ -328,7 +328,7 @@ web_string_view WebStringViewChop(web_string_view Sv, web_string_view Delimiter)
         }
     }
 
-    return WEB_SV_LIT("");
+    return Sv;
 }
 
 web_string_view WebStringViewChopCStr(web_string_view Sv, const char *Delimiter) {

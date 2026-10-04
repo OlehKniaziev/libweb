@@ -56,22 +56,15 @@ int main(int ArgumentsCount, char **Arguments) {
 
     web_string_view SymbolDelimiter = WEB_SV_LIT(",");
 
-    while (1) {
+    while (HandlerListString.Count > 0) {
         web_string_view HandlerName = WebStringViewChop(HandlerListString, SymbolDelimiter);
-        if (HandlerName.Count == 0) {
-            if (HandlerListString.Count != 0) {
-                void *Symbol = GetSymbol(Handle, HandlerListString);
-                WEB_ARRAY_PUSH(&Arena, &Handlers, Symbol);
-            }
-
-            break;
+        if (HandlerName.Count != 0) {
+            void *Symbol = GetSymbol(Handle, HandlerName);
+            WEB_ARRAY_PUSH(&Arena, &Handlers, Symbol);
         }
 
-        void *Symbol = GetSymbol(Handle, HandlerName);
-        WEB_ARRAY_PUSH(&Arena, &Handlers, Symbol);
-
-        HandlerListString.Count -= HandlerName.Count + SymbolDelimiter.Count;
         HandlerListString.Items += HandlerName.Count + SymbolDelimiter.Count;
+        HandlerListString.Count -= HandlerName.Count + SymbolDelimiter.Count;
     }
 
     WEB_LOG_FMT(INFO, TEST, "Found %ld test handlers", Handlers.Count);

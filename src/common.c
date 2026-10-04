@@ -1,4 +1,5 @@
 #include "common.h"
+#include "test.h"
 
 #include <ctype.h>
 #include <fcntl.h>
@@ -139,8 +140,6 @@ static void *FixedArenaPush(web_fixed_arena *Fixed, uz Size, uz Align) {
 }
 
 static void *ChainedArenaPush(web_chained_arena *Arena, uz Size, uz Align) {
-    WEB_VERIFY(Arena->Head != NULL);
-
     Size = WebAlignForward(Size, Align);
 
     web_chained_arena_block *Block = Arena->Head;
@@ -181,24 +180,27 @@ static void *FixedArenaRealloc(web_fixed_arena *Arena, void *OldPtr, uz OldSize,
 }
 
 static void *ChainedArenaRealloc(web_chained_arena *Arena, void *OldPtr, uz OldSize, uz NewSize, uz Align) {
-    NewSize = WebAlignForward(OldSize, Align);
+    NewSize = WebAlignForward(NewSize, Align);
 
     web_chained_arena_block *Block = Arena->Head;
     while (Block != NULL) {
         if (Block->LastAlloc == OldPtr) {
             uz BlockAlignedOffset = WebAlignForward(Block->Offset, Align);
+            void *AlignedPtr = (void *)WebAlignForward((uz)OldPtr, Align);
+            uz AlignmentDelta = (uz)AlignedPtr - (uz)OldPtr;
+            BlockAlignedOffset += AlignmentDelta;
+
             if (BlockAlignedOffset <= Block->Capacity && Block->Capacity - BlockAlignedOffset >= NewSize) {
                 Block->Offset = BlockAlignedOffset + NewSize;
-                return OldPtr;
+                return AlignedPtr;
             }
 
-            goto End;
+            break;
         }
 
         Block = Block->Next;
     }
 
-End: ;
     void *Ptr = ChainedArenaPush(Arena, NewSize, Align);
     memcpy(Ptr, OldPtr, OldSize);
     return Ptr;
@@ -297,18 +299,17 @@ void WebArenaReset(web_arena *Arena) {
 web_string_view WebArenaFormat(web_arena *Arena, const char *Fmt, ...) {
     va_list Args;
     va_start(Args, Fmt);
-    uz BytesNeeded = vsnprintf(NULL, 0, Fmt, Args);
-    ++BytesNeeded; // NOTE(oleh): Null terminator.
+    uz ResultCount = vsnprintf(NULL, 0, Fmt, Args);
     va_end(Args);
 
-    u8 *Buffer = (u8 *)WebArenaPush(Arena, BytesNeeded, 1);
+    u8 *Buffer = (u8 *)WebArenaPush(Arena, ResultCount + 1, 1);
     va_start(Args, Fmt);
     vsprintf((char *)Buffer, Fmt, Args);
     va_end(Args);
 
     web_string_view Result;
     Result.Items = Buffer;
-    Result.Count = BytesNeeded - 1;
+    Result.Count = ResultCount;
     return Result;
 }
 
@@ -333,3 +334,63 @@ web_string_view WebStringViewChop(web_string_view Sv, web_string_view Delimiter)
 web_string_view WebStringViewChopCStr(web_string_view Sv, const char *Delimiter) {
     return WebStringViewChop(Sv, WEB_SV_LIT(Delimiter));
 }
+
+typedef WEB_MAP_TYPE(web_string_view, s32) string_map;
+
+WEB_DEFINE_TEST(MapOps) {
+    string_map Map = {0};
+    WEB_STRING_MAP_INIT(&Runner->Arena, &Map);
+
+    web_string_view Key = WEB_SV_LIT("hello");
+    s32 Value = 1;
+
+    WEB_MAP_INSERT(&Runner->Arena, &Map, Key, Value);
+    WEB_T_EQUAL(Map.Count, 1);
+
+    s32 GetValue = 1;
+    WEB_T_TRUE(WEB_MAP_GET(&Map, Key, &GetValue));
+    WEB_T_EQUAL(GetValue, Value);
+
+    WEB_MAP_INSERT(&Runner->Arena, &Map, Key, Value + 1);
+    WEB_T_EQUAL(Map.Count, 1);
+
+    WEB_T_TRUE(WEB_MAP_GET(&Map, Key, &GetValue));
+    WEB_T_EQUAL(GetValue, Value + 1);
+}
+
+// #if 0
+WEB_DEFINE_TEST(MapGrow) {
+    string_map Map = {0};
+    WEB_STRING_MAP_INIT(&Runner->Arena, &Map);
+
+    WEB_T_EQUAL(Map.Capacity, WEB_MAP_DEFAULT_CAP);
+
+    WEB_ARRAY_TYPE(web_string_view) Keys = {0};
+    WEB_ARRAY_INIT(&Runner->Arena, &Keys);
+
+    WEB_ARRAY_TYPE(s32) Values = {0};
+    WEB_ARRAY_INIT(&Runner->Arena, &Values);
+
+    for (s32 Value = 0; Value < WEB_MAP_DEFAULT_CAP; ++Value) {
+        web_string_view Key = WebArenaFormat(&Runner->Arena, "%d", Value);
+        WEB_MAP_INSERT(&Runner->Arena, &Map, Key, Value);
+
+        WEB_ARRAY_PUSH(&Runner->Arena, &Keys, Key);
+        WEB_ARRAY_PUSH(&Runner->Arena, &Values, Value);
+    }
+
+    WEB_T_EQUAL(Map.Count, Keys.Count);
+    WEB_T_EQUAL(Map.Capacity, WEB_MAP_CAPACITY_STEP(WEB_MAP_DEFAULT_CAP));
+
+    WEB_T_EQUAL(Keys.Count, Values.Count);
+
+    for (sz KeyIdx = 0; KeyIdx < Keys.Count; ++KeyIdx) {
+        web_string_view Key = Keys.Items[KeyIdx];
+        s32 ExpectedValue = Values.Items[KeyIdx];
+
+        s32 GotValue = 0;
+        WEB_T_TRUE(WEB_MAP_GET(&Map, Key, &GotValue));
+        WEB_T_EQUAL(ExpectedValue, GotValue);
+    }
+}
+// #endif // 0

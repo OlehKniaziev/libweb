@@ -56,7 +56,7 @@
 
 #ifdef __cplusplus
 extern "C" {
-#endif
+#endif // __cplusplus
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -241,30 +241,142 @@ b32 WebReadFullFile(web_arena *Arena, const char *Path, web_string_view *OutCont
 
 u64 WebHashFnv1(web_string_view Input);
 
-typedef struct {
-    b8 HasValue;
-    web_string_view Value;
-} optional_web_string_view;
+b32 WebParseS64(web_string_view Input, s64 *Out);
+
+#define WEB_ARRAY_TYPE(T) struct { \
+    T *Items; \
+    sz Capacity; \
+    sz Count; \
+}
+
+typedef u8 web_map_meta_flags;
+
+enum : web_map_meta_flags {
+    WEB_MAP_META_OCCUPIED = 1 << 0,
+};
 
 typedef struct {
-    b8 HasValue;
-    f64 Value;
-} optional_f64;
+    web_map_meta_flags Flags;
+} web_map_meta;
 
-typedef struct {
-    b8 HasValue;
-    u64 Value;
-} optional_u64;
+#define WEB_MAP_TYPE(KeyType, ValueType) struct { \
+    void *HashProc; \
+    void *EqProc; \
+    KeyType *Keys; \
+    ValueType *Values; \
+    web_map_meta *Meta; \
+    sz Capacity; \
+    sz Count; \
+}
 
-typedef struct {
-    b8 HasValue;
-    u32 Value;
-} optional_u32;
+#define WEB_MAP_DEFAULT_CAP 11
 
-b32 WebParseS64(web_string_view, s64 *);
+#define WEB_MAP_INIT_CAP(Arena, Map, _HashP, _EqP, _Cap) do { \
+    typedef typeof(*(Map)->Keys) key_type; \
+    typedef typeof(*(Map)->Values) value_type; \
+    u64 (*HashP)(key_type) = (_HashP); \
+    b32 (*EqP)(key_type, key_type) = (_EqP); \
+    sz InitCapacity = (_Cap); \
+    InitCapacity = InitCapacity > 0 ? InitCapacity : WEB_MAP_DEFAULT_CAP; \
+    (Map)->Capacity = InitCapacity; \
+    (Map)->Count = 0; \
+    (Map)->Keys = WEB_ARENA_NEW_MANY(Arena, key_type, (Map)->Capacity); \
+    (Map)->Values = WEB_ARENA_NEW_MANY(Arena, value_type, (Map)->Capacity); \
+    (Map)->Meta = WEB_ARENA_NEW_MANY(Arena, web_map_meta, (Map)->Capacity); \
+    (Map)->HashProc = HashP; \
+    (Map)->EqProc = EqP; \
+} while (0)
+
+#define WEB_MAP_CAPACITY_STEP(Capacity) ((Capacity + 1) * 3)
+
+#define WEB_MAP_FOREACH(Map, IdxName) for (sz IdxName = 0; IdxName < (Map)->Capacity; ++IdxName) if ((Map)->Meta[IdxName].Flags & WEB_MAP_META_OCCUPIED)
+
+#define _WEB_MAP_DO_INSERT(Arena, Map, _Key, _Value) do { \
+    typedef typeof(*(Map)->Keys) key_type; \
+    typedef typeof(*(Map)->Values) value_type; \
+    key_type KeyToInsert = (_Key); \
+    value_type ValueToInsert = (_Value); \
+    u64 (*HashProc)(key_type) = (Map)->HashProc; \
+    b32 (*EqProc)(key_type, key_type) = (Map)->EqProc; \
+    u64 Hash = HashProc(KeyToInsert); \
+    sz KeyIdx = (sz)(Hash % (u64)(Map)->Capacity); \
+    while (1) { \
+        web_map_meta *Meta = &(Map)->Meta[KeyIdx]; \
+        if (!(Meta->Flags & WEB_MAP_META_OCCUPIED)) { \
+            (Map)->Values[KeyIdx] = ValueToInsert; \
+            (Map)->Keys[KeyIdx] = KeyToInsert; \
+            Meta->Flags |= WEB_MAP_META_OCCUPIED; \
+            (Map)->Count += 1; \
+            break; \
+        } \
+        key_type Key = (Map)->Keys[KeyIdx]; \
+        if (EqProc(KeyToInsert, Key)) { \
+            (Map)->Values[KeyIdx] = ValueToInsert; \
+            break; \
+        } \
+        KeyIdx += 1; \
+        if (KeyIdx >= (Map)->Capacity) KeyIdx = 0; \
+    } \
+} while (0)
+
+#define WEB_MAP_GROW(Arena, Map, _Cap) do { \
+    sz DesiredCapacity = (_Cap); \
+    if (DesiredCapacity <= (Map)->Capacity) break; \
+    typedef typeof(*(Map)->Keys) key_type; \
+    typeof(*(Map)) NewMap = {0}; \
+    WEB_MAP_INIT_CAP(Arena, &NewMap, (u64 (*)(key_type))(Map)->HashProc, (b32 (*)(key_type, key_type))(Map)->EqProc, DesiredCapacity); \
+    WEB_MAP_FOREACH((Map), KeyIdx) { \
+        _WEB_MAP_DO_INSERT(Arena, &NewMap, (Map)->Keys[KeyIdx], (Map)->Values[KeyIdx]); \
+    } \
+    *(Map) = NewMap; \
+} while (0)
+
+#define WEB_MAP_LOAD_CEILING 70
+
+#define WEB_MAP_INSERT(Arena, Map, _Key, _Value) do { \
+    sz Load = (Map)->Count * 100 / (Map)->Capacity; \
+    if (Load >= WEB_MAP_LOAD_CEILING) { \
+        sz NewCapacity = WEB_MAP_CAPACITY_STEP((Map)->Capacity); \
+        WEB_MAP_GROW(Arena, Map, NewCapacity); \
+    } \
+    _WEB_MAP_DO_INSERT(Arena, Map, _Key, _Value); \
+} while (0)
+
+#define WEB_MAP_GET(Map, _Key, _Out) ({ \
+    typedef typeof(*(Map)->Keys) key_type; \
+    typedef typeof(*(Map)->Values) value_type; \
+    u64 (*HashP)(key_type) = (Map)->HashProc; \
+    b32 (*EqP)(key_type, key_type) = (Map)->EqProc; \
+    value_type *OutValue = (_Out); \
+    key_type GetKey = (_Key); \
+    u64 Hash = HashP(GetKey); \
+    sz KeyIdx = (sz)(Hash % (u64)(Map)->Capacity); \
+    sz StartingIdx = KeyIdx; \
+    b32 Result = 0; \
+    do { \
+        web_map_meta Meta = (Map)->Meta[KeyIdx]; \
+        if (Meta.Flags & WEB_MAP_META_OCCUPIED) { \
+            if (EqP(GetKey, Key)) { \
+                if (OutValue != NULL) *OutValue = (Map)->Values[KeyIdx]; \
+                Result = 1; \
+                break; \
+            } \
+        } \
+        KeyIdx += 1; \
+        if (KeyIdx >= (Map)->Capacity) KeyIdx = 0; \
+    } while (KeyIdx != StartingIdx); \
+    Result; \
+})
+
+#define WEB_MAP_CONTAINS(Map, Key) WEB_MAP_GET(Map, Key, NULL)
+
+#define WEB_MAP_INIT(Arena, Hash, Eq, Map) WEB_MAP_INIT_CAP(Arena, Map, Hash, Eq, WEB_MAP_DEFAULT_CAP)
+
+#define WEB_STRING_MAP_INIT_CAP(Arena, Map, Cap) WEB_MAP_INIT_CAP(Arena, Map, WebHashFnv1, WebStringViewEqual, Cap)
+#define WEB_STRING_MAP_INIT(Arena, Map) WEB_STRING_MAP_INIT_CAP(Arena, Map, WEB_MAP_DEFAULT_CAP)
 
 #ifdef __cplusplus
 }
-#endif
+#endif // __cplusplus
 
 #endif // WEB_COMMON_H_

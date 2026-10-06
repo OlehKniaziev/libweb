@@ -760,6 +760,22 @@ static sz HttpsCloseConnection(web_https_session *Sess) {
     return Sess->VTable.Close(Sess->Data);
 }
 
+static b32 HeadersContainConnectionClose(const web_http_headers *Headers) {
+    web_http_header ConnectionHeader = {0};
+    if (!WebHttpHeadersGet(Headers, WEB_SV_LIT("Connection"), &ConnectionHeader)) {
+        return 0;
+    }
+
+    for (sz TokenIdx = 0; TokenIdx < ConnectionHeader.Value.Count; ++TokenIdx) {
+        web_string_view ConnectionToken = ConnectionHeader.Value.Items[TokenIdx];
+        if (WebStringViewEqualCStr(ConnectionToken, "close")) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 b32 WebHttpRequestSend(web_http_context *Context,
                        web_string_view Hostname,
                        u16 Port,
@@ -808,6 +824,14 @@ b32 WebHttpRequestSend(web_http_context *Context,
         if (Status <= 0) WEB_TODO();
     }
 
+    // TODO(oleh): Use a functional map impl here to avoid copies.
+    if (!HeadersContainConnectionClose(&Request.Headers)) {
+        web_http_headers NewHeaders = {0};
+        WEB_MAP_COPY(&Context->Arena, &NewHeaders, &Request.Headers);
+        WebHttpHeadersAdd(&Context->Arena, &NewHeaders, WEB_SV_LIT("Connection"), WEB_SV_LIT("close"));
+        Request.Headers = NewHeaders;
+    }
+
     worker_data *WorkerData = WebSyncPoolAlloc(&Context->WorkerPool);
 
     WorkerData->Context = Context;
@@ -835,6 +859,8 @@ End:
     if (Context->UseHttps) {
         HttpsCloseConnection(&HttpsSession);
     }
+
+    close(Sock);
 
     return Result;
 }
@@ -966,22 +992,6 @@ static void AddDefaultHeaders(web_arena *Arena, web_http_headers *Headers) {
     WebHttpHeadersAdd(Arena, Headers, WEB_SV_LIT("Connection"), WEB_SV_LIT("close"));
 }
 
-static b32 ShouldCloseConnection(const web_http_headers *Headers) {
-    web_http_header ConnectionHeader = {0};
-    if (!WebHttpHeadersGet(Headers, WEB_SV_LIT("Connection"), &ConnectionHeader)) {
-        return 0;
-    }
-
-    for (sz TokenIdx = 0; TokenIdx < ConnectionHeader.Value.Count; ++TokenIdx) {
-        web_string_view ConnectionToken = ConnectionHeader.Value.Items[TokenIdx];
-        if (WebStringViewEqualCStr(ConnectionToken, "close")) {
-            return 1;
-        }
-    }
-
-    return 0;
-}
-
 static void ServerWorker(void *Arg) {
     worker_data *Data = (worker_data *)Arg;
 
@@ -1064,7 +1074,7 @@ Cleanup:
         goto CloseConnection;
     }
 
-    if (ShouldCloseConnection(&Ctx->Request.Headers) || ShouldCloseConnection(&Ctx->ResponseHeaders)) {
+    if (HeadersContainConnectionClose(&Ctx->Request.Headers) || HeadersContainConnectionClose(&Ctx->ResponseHeaders)) {
         goto CloseConnection;
     }
 
@@ -1386,10 +1396,10 @@ WEB_DEFINE_TEST(ShouldCloseConnection) {
 
         WEB_MAP_RESET(&Headers);
         WEB_T_NEQUAL(ParseHeaders(&Runner->Arena, Input, &Headers), -1);
-        WEB_T_TRUE(ShouldCloseConnection(&Headers));
+        WEB_T_TRUE(HeadersContainConnectionClose(&Headers));
     }
 
     WEB_MAP_RESET(&Headers);
     WEB_T_NEQUAL(ParseHeaders(&Runner->Arena, WEB_SV_LIT("A: b\r\n\r\n"), &Headers), -1);
-    WEB_T_FALSE(ShouldCloseConnection(&Headers));
+    WEB_T_FALSE(HeadersContainConnectionClose(&Headers));
 }

@@ -201,10 +201,10 @@ typedef struct {
     web_https_provider *HttpsProvider;
 } web_http_context_config;
 
-b32 WebHttpContextInit(web_http_context_config *, web_http_context *);
-b32 WebHttpServerInit(web_http_context *, web_http_server *);
+b32 WebHttpContextInit(web_http_context_config *Config, web_http_context *Context);
+b32 WebHttpServerInit(web_http_context *Context, web_http_server *Server);
 
-void WebHttpResponseWrite(web_http_response_context *, web_string_view);
+void WebHttpResponseWrite(web_http_response_context *Context, web_string_view Body);
 
 void WebHttpServerStart(web_http_server *Server, u16 Port);
 void WebHttpServerAttachHandler(web_http_server *Server, const char *Path, web_http_request_handler WebHandler);

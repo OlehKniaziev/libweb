@@ -203,6 +203,8 @@ void WebReturnTempArena(web_temp Temp);
 
 #define WEB_ARENA_REALLOC_ITEMS(Arena, Items, OldCount, NewCount) (WebArenaRealloc((Arena), (Items), sizeof(*(Items)) * (OldCount), sizeof(*Items) * (NewCount), alignof(*(Items))))
 
+#define WEB_ARENA_COPY_ITEMS(Dest, Src, Count) (memcpy((Dest), (Src), sizeof(1 ? *(Dest) : *(Src)) * (Count)))
+
 static inline char *WebStringViewCloneCStr(web_arena *Arena, web_string_view Sv) {
     char *Buffer = (char *)WebArenaPush(Arena, Sv.Count + 1, sizeof(char));
     memcpy(Buffer, Sv.Items, Sv.Count);
@@ -382,6 +384,18 @@ typedef struct {
         WEB_STRUCT_ZERO(Meta); \
     } \
     (Map)->Count = 0; \
+} while (0)
+
+#define WEB_MAP_COPY(Arena, _Dest, _Src) do { \
+    typeof((_Src)) SrcMap = (_Src); \
+    typeof(SrcMap) DestMap = (_Dest); \
+    memcpy(DestMap, SrcMap, sizeof(*(DestMap))); \
+    DestMap->Keys = WEB_ARENA_NEW_MANY(Arena, typeof(*SrcMap->Keys), SrcMap->Capacity); \
+    WEB_ARENA_COPY_ITEMS(DestMap->Keys, SrcMap->Keys, SrcMap->Capacity); \
+    DestMap->Values = WEB_ARENA_NEW_MANY(Arena, typeof(*SrcMap->Values), SrcMap->Capacity); \
+    WEB_ARENA_COPY_ITEMS(DestMap->Values, SrcMap->Values, SrcMap->Capacity); \
+    DestMap->Meta = WEB_ARENA_NEW_MANY(Arena, typeof(*SrcMap->Meta), SrcMap->Capacity); \
+    WEB_ARENA_COPY_ITEMS(DestMap->Meta, SrcMap->Meta, SrcMap->Capacity); \
 } while (0)
 
 #ifdef __cplusplus

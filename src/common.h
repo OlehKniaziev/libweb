@@ -52,7 +52,7 @@
 #define WEB_MIN(a, b) ((a) < (b) ? (a) : (b))
 #define WEB_MAX(a, b) ((a) > (b) ? (a) : (b))
 
-#define WEB_ARRAY_COUNT(Arr) (sizeof((Arr)) / (sizeof((Arr)[0])))
+#define WEB_ARRAY_COUNT(Arr) ((sz)(sizeof((Arr)) / (sizeof((Arr)[0]))))
 
 #ifdef __cplusplus
 extern "C" {
@@ -375,6 +375,14 @@ typedef struct {
 
 #define WEB_STRING_MAP_INIT_CAP(Arena, Map, Cap) WEB_MAP_INIT_CAP(Arena, Map, WebHashFnv1, WebStringViewEqual, Cap)
 #define WEB_STRING_MAP_INIT(Arena, Map) WEB_STRING_MAP_INIT_CAP(Arena, Map, WEB_MAP_DEFAULT_CAP)
+
+#define WEB_MAP_RESET(Map) do { \
+    WEB_MAP_FOREACH((Map), KeyIdx) { \
+        web_map_meta *Meta = &(Map)->Meta[KeyIdx]; \
+        WEB_STRUCT_ZERO(Meta); \
+    } \
+    (Map)->Count = 0; \
+} while (0)
 
 #ifdef __cplusplus
 }

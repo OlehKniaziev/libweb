@@ -261,6 +261,8 @@ static sz ParseHeader(
 static sz ParseHeaders(web_arena *Arena,
                        web_string_view Buffer,
                        web_http_headers *Headers) {
+    WEB_ASSERT(Headers->Capacity != 0);
+
     for (sz CharIdx = 0; CharIdx < Buffer.Count; ) {
         if (Buffer.Items[CharIdx] == '\r' && Buffer.Count - CharIdx > 1 && Buffer.Items[CharIdx + 1] == '\n') {
             return CharIdx + 2;
@@ -875,8 +877,7 @@ static b32 HttpRequestParseStreaming(worker_data *WorkerData,
     s64 ContentLength = -1;
     web_string_view HeaderName = {0};
     web_string_view HeaderValue = {0};
-    web_http_headers Headers = {0};
-    WEB_STRING_MAP_INIT(Arena, &Headers);
+    WEB_STRING_MAP_INIT(Arena, &Request->Headers);
 
 ReceiveLoop:
     if (BufferCount >= BufferCapacity) {
@@ -930,13 +931,13 @@ ParseHeaders:
             return 0;
         }
 
-        InsertPotentiallyCommaSeparatedHeaderValue(Arena, &Headers, HeaderName, HeaderValue);
+        InsertPotentiallyCommaSeparatedHeaderValue(Arena, &Request->Headers, HeaderName, HeaderValue);
 
         ParseOffset += N;
 
         if (WebStringViewEqualCStr(HeaderName, CONTENT_LENGTH_HEADER)) {
             web_http_header Header = {0};
-            WEB_ASSERT(WebHttpHeadersGet(&Headers, HeaderName, &Header));
+            WEB_ASSERT(WebHttpHeadersGet(&Request->Headers, HeaderName, &Header));
             ParseContentLength(Header, &ContentLength);
         }
     }
@@ -960,24 +961,47 @@ ParseBody:
     }
 }
 
+static void AddDefaultHeaders(web_arena *Arena, web_http_headers *Headers) {
+    WebHttpHeadersAdd(Arena, Headers, WEB_SV_LIT("Access-Control-Allow-Origin"), WEB_SV_LIT("*"));
+    WebHttpHeadersAdd(Arena, Headers, WEB_SV_LIT("Connection"), WEB_SV_LIT("close"));
+}
+
+static b32 ShouldCloseConnection(const web_http_headers *Headers) {
+    web_http_header ConnectionHeader = {0};
+    if (!WebHttpHeadersGet(Headers, WEB_SV_LIT("Connection"), &ConnectionHeader)) {
+        return 0;
+    }
+
+    for (sz TokenIdx = 0; TokenIdx < ConnectionHeader.Value.Count; ++TokenIdx) {
+        web_string_view ConnectionToken = ConnectionHeader.Value.Items[TokenIdx];
+        if (WebStringViewEqualCStr(ConnectionToken, "close")) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 static void ServerWorker(void *Arg) {
     worker_data *Data = (worker_data *)Arg;
 
+HandleRequest: ;
     web_http_response_context *Ctx = WebSyncPoolAlloc(&Data->Context->ResponseContextPool);
 
     WebArenaReset(&Ctx->Arena);
-    Ctx->ResponseHeaders.Count = 0;
     WEB_STRING_MAP_INIT(&Ctx->Arena, &Ctx->ResponseHeaders);
-    Ctx->Content = (web_string_view) {0};
+    WEB_STRUCT_ZERO(&Ctx->Content);
 
-    web_http_request HttpRequest;
-    b32 Success = HttpRequestParseStreaming(Data, &Ctx->Arena, &HttpRequest);
-    if (!Success) {
+    web_http_request HttpRequest = {0};
+    b32 RequestParsed = HttpRequestParseStreaming(Data, &Ctx->Arena, &HttpRequest);
+    if (!RequestParsed) {
         WEB_LOG(INFO, HTTP, "Could not streaming parse HTTP request");
         goto Cleanup;
     }
 
     Ctx->Request = HttpRequest;
+
+    AddDefaultHeaders(&Ctx->Arena, &Ctx->ResponseHeaders);
 
     for (uz HandlerIndex = 0; HandlerIndex < Data->Server->HandlersCount; ++HandlerIndex) {
         web_string_view HandlerPath = Data->Server->HandlersPaths[HandlerIndex];
@@ -997,12 +1021,14 @@ static void ServerWorker(void *Arg) {
         HttpHeadersFormat(&Ctx->Arena, &ResponseHeadersString, Ctx->ResponseHeaders);
 
         web_string_view ResponseString = WebArenaFormat(&Ctx->Arena,
-                                                        WEB_SV_FMT "%u %s\r\nAccess-Control-Allow-Origin: *\r\n" WEB_SV_FMT "\r\n" WEB_SV_FMT,
+                                                        WEB_SV_FMT " %u %s\r\n" WEB_SV_FMT "\r\n" WEB_SV_FMT,
                                                         WEB_SV_ARG(VersionString),
                                                         ResponseStatus,
                                                         ReasonPhrase,
                                                         WEB_SV_ARG(ResponseHeadersString),
                                                         WEB_SV_ARG(Ctx->Content));
+
+        WEB_LOG_FMT(DEBUG, HTTP, "Sending the response string to the client:\r\n" WEB_SV_FMT, WEB_SV_ARG(ResponseString));
 
         sz NumSent = HttpSend(Data, ResponseString);
         WEB_VERIFY(NumSent > 0);
@@ -1014,17 +1040,46 @@ static void ServerWorker(void *Arg) {
     const char *ReasonPhrase = GetHTTPResponseStatusReasonPhrase(ResponseStatus);
     web_string_view VersionString = GetHTTPVersionString(&Ctx->Arena, HttpRequest.Version);
 
+    web_dynamic_string HeadersString = {0};
+    HttpHeadersFormat(&Ctx->Arena, &HeadersString, Ctx->ResponseHeaders);
+
     // TODO(oleh): No handler found, just give em 404!
     web_string_view ResponseString = WebArenaFormat(&Ctx->Arena,
-                                                    WEB_SV_FMT "%u %s\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
+                                                    WEB_SV_FMT " %u %s\r\n" WEB_SV_FMT "\r\n" WEB_SV_FMT,
                                                     WEB_SV_ARG(VersionString),
                                                     ResponseStatus,
-                                                    ReasonPhrase);
+                                                    ReasonPhrase,
+                                                    WEB_SV_ARG(HeadersString),
+                                                    WEB_SV_ARG(Ctx->Content));
 
-    int SendStatus = send(Data->Sock, ResponseString.Items, ResponseString.Count, 0);
+    int SendStatus = HttpSend(Data, ResponseString);
     WEB_ASSERT(SendStatus != -1);
 
 Cleanup:
+    WebSyncPoolFree(&Data->Context->ResponseContextPool, Ctx);
+
+    web_http_header ConnectionHeader = {0};
+
+    if (!RequestParsed || Ctx->Request.Version.Number == HTTP_1_0) {
+        goto CloseConnection;
+    }
+
+    if (ShouldCloseConnection(&Ctx->Request.Headers) || ShouldCloseConnection(&Ctx->ResponseHeaders)) {
+        goto CloseConnection;
+    }
+
+    if (WebHttpHeadersGet(&Ctx->Request.Headers, WEB_SV_LIT("Connection"), &ConnectionHeader)) {
+        for (sz TokenIdx = 0; TokenIdx < ConnectionHeader.Value.Count; ++TokenIdx) {
+            web_string_view ConnectionToken = ConnectionHeader.Value.Items[TokenIdx];
+            if (WebStringViewEqualCStr(ConnectionToken, "close")) {
+                goto CloseConnection;
+            }
+        }
+    }
+
+    goto HandleRequest;
+
+CloseConnection:
     if (Data->Server->Context->UseHttps) {
         HttpsCloseConnection(&Data->HttpsSession);
     }
@@ -1037,7 +1092,7 @@ static const char *HttpsGetErrorString(web_https_provider *Provider, int Error) 
     WEB_CASE_PROVIDER_OPENSSL({
         uz SslError = ERR_get_error();
         return ERR_error_string(SslError, NULL);
-    });
+    })
     case WEB_HTTPS_PROVIDER_CUSTOM: {
         web_https_custom_provider *Custom = (web_https_custom_provider *) Provider->Data;
         return Custom->VTable.GetErrorString(Custom->Data, Error);
@@ -1314,4 +1369,27 @@ WEB_DEFINE_TEST(ParseHeaderListValue) {
     WEB_T_EQUAL(Value.Count, 1);
 
     WEB_T_EQUAL(Value.Items[0], WEB_SV_LIT("a"));
+}
+
+WEB_DEFINE_TEST(ShouldCloseConnection) {
+    const char *Inputs[] = {
+        "Connection: close\r\n\r\n",
+        "Connection: keep,close\r\n\r\n",
+        "A: b\r\nConnection: close\r\n\r\n",
+    };
+
+    web_http_headers Headers = {0};
+    WEB_STRING_MAP_INIT(&Runner->Arena, &Headers);
+
+    for (sz I = 0; I < WEB_ARRAY_COUNT(Inputs); ++I) {
+        web_string_view Input = WEB_SV_LIT(Inputs[I]);
+
+        WEB_MAP_RESET(&Headers);
+        WEB_T_NEQUAL(ParseHeaders(&Runner->Arena, Input, &Headers), -1);
+        WEB_T_TRUE(ShouldCloseConnection(&Headers));
+    }
+
+    WEB_MAP_RESET(&Headers);
+    WEB_T_NEQUAL(ParseHeaders(&Runner->Arena, WEB_SV_LIT("A: b\r\n\r\n"), &Headers), -1);
+    WEB_T_FALSE(ShouldCloseConnection(&Headers));
 }

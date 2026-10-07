@@ -14,7 +14,7 @@ int main() {
     web_http_context_config Config = {0};
     web_http_context Context = {0};
 
-    WEB_VERIFY(WebHttpContextInit(&Config, &Context));
+    WEB_VERIFY(WebHttpContextInit(Config, &Context));
 
     WEB_VERIFY(WebHttpServerInit(&Context, &Server));
 

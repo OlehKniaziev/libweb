@@ -130,6 +130,8 @@ b32 WebParseS64(web_string_view Buffer, s64 *Out) {
 #ifndef WEB_MEMORY_SANITIZER
 static void *FixedArenaPush(web_fixed_arena *Fixed, uz Size, uz Align) {
     Size = WebAlignForward(Size, Align);
+    Fixed->Offset = WebAlignForward(Fixed->Offset, Align);
+
     uz AvailableBytes = Fixed->Capacity - Fixed->Offset;
     if (AvailableBytes < Size) WEB_PANIC_FMT("Fixed arena out of memory for requested size %zu!", Size);
 

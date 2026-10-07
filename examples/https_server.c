@@ -67,12 +67,12 @@ int main(int ArgsCount, char **Args) {
     WebHttpsProviderInitOpenSSL(&OpenSSLConfig, &Provider);
 
     web_http_context_config Config = {
-        .UseHttps = 1,
-        .HttpsProvider = &Provider,
+        .UseHTTPS = 1,
+        .HTTPSProvider = &Provider,
     };
     web_http_context Context = {0};
 
-    WEB_VERIFY(WebHttpContextInit(&Config, &Context));
+    WEB_VERIFY(WebHttpContextInit(Config, &Context));
     WEB_VERIFY(WebHttpServerInit(&Context, &Server));
 
     WebHttpServerAttachHandler(&Server, "/", RootHandler);

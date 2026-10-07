@@ -11,11 +11,33 @@
     extern "C" {
 #endif
 
+#define WEB_ENUM_HTTP_VERSIONS \
+    X(1, 0, "HTTP/1.0") \
+    X(1, 1, "HTTP/1.1")
+
+#define WEB_MAKE_HTTP_NUMBER(Major, Minor) ((u32)(Minor) << 16 | (u32)(Major))
+
+enum {
+#define X(Major, Minor, String) HTTP_##Major##_##Minor = WEB_MAKE_HTTP_NUMBER((Major), (Minor)),
+WEB_ENUM_HTTP_VERSIONS
+#undef X
+};
+
+// @Portability(oleh): Will not work on big-endian systems.
+typedef union {
+    struct {
+        u16 Major;
+        u16 Minor;
+    };
+    u32 Number;
+} web_http_version;
+
 typedef struct {
     web_arena Arena;
     web_thread_pool ThreadPool;
     b32 UseHttps;
     web_https_provider *HttpsProvider;
+    web_http_version HTTPVersion;
 
     web_sync_pool WorkerPool;
     web_sync_pool TaskPool;
@@ -61,27 +83,6 @@ void WebHttpHeadersAdd(
         web_string_view Name,
         web_string_view Value
 );
-
-#define WEB_ENUM_HTTP_VERSIONS \
-    X(1, 0, "HTTP/1.0") \
-    X(1, 1, "HTTP/1.1")
-
-#define WEB_MAKE_HTTP_NUMBER(Major, Minor) ((u32)(Minor) << 16 | (u32)(Major))
-
-enum {
-#define X(Major, Minor, String) HTTP_##Major##_##Minor = WEB_MAKE_HTTP_NUMBER((Major), (Minor)),
-WEB_ENUM_HTTP_VERSIONS
-#undef X
-};
-
-// @Portability(oleh): Will not work on big-endian systems.
-typedef union {
-    struct {
-        u16 Major;
-        u16 Minor;
-    };
-    u32 Number;
-} web_http_version;
 
 #define WEB_ENUM_HTTP_RESPONSE_STATUSES                             \
     X(OK, 200, "OK")                                            \
@@ -168,10 +169,20 @@ typedef struct {
     web_string_view Body;
 } web_http_response;
 
+web_http_request WebHttpRequestBuild(
+        web_http_context *Context,
+        web_string_view Path,
+        web_http_method Method,
+        web_string_view Body,
+        ...
+);
+
+#define WEB_HTTP_REQUEST_BUILD_H(Ctx, Path, Method, Body, ...) (WebHttpRequestBuild((Ctx), (Path), (Method), (Body), __VA_ARGS__, NULL))
+#define WEB_HTTP_REQUEST_BUILD(Ctx, Path, Method, Body) (WebHttpRequestBuild((Ctx), (Path), (Method), (Body), NULL))
+
 b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_request *Out, web_string_view *Error);
 b32 WebHttpRequestSend(web_http_context *Context,
                        web_string_view Hostname,
-                       u16 Port,
                        web_http_request Request,
                        web_http_response *Response);
 
@@ -197,11 +208,12 @@ typedef struct {
 typedef struct {
     s64 GlobalPoolCapacity;
     s16 NumThreads;
-    b32 UseHttps;
-    web_https_provider *HttpsProvider;
+    b32 UseHTTPS;
+    web_https_provider *HTTPSProvider;
+    web_http_version HTTPVersion;
 } web_http_context_config;
 
-b32 WebHttpContextInit(web_http_context_config *Config, web_http_context *Context);
+b32 WebHttpContextInit(web_http_context_config Config, web_http_context *Context);
 b32 WebHttpServerInit(web_http_context *Context, web_http_server *Server);
 
 void WebHttpResponseWrite(web_http_response_context *Context, web_string_view Body);

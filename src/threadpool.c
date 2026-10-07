@@ -25,7 +25,13 @@ static void *ThreadPoolWorkerProc(void *Arg) {
 
         Task->Proc(Task->Arg);
 
+        WebMutexLock(&Task->Mu);
+
+        Task->Completed = 1;
+
         pthread_cond_broadcast(&Task->Cond);
+
+        WebMutexUnlock(&Task->Mu);
     }
 
     return NULL;
@@ -37,10 +43,6 @@ b32 WebThreadPoolInit(web_thread_pool *ThreadPool, web_arena *Arena, web_thread_
 
     ThreadPool->Threads = WEB_ARENA_NEW_MANY(Arena, typeof(*ThreadPool->Threads), ThreadPool->ThreadsCount);
 
-    for (uz I = 0; I < ThreadPool->ThreadsCount; ++I) {
-        if (!WebThreadLaunch(&ThreadPool->Threads[I], ThreadPoolWorkerProc, ThreadPool)) return 0;
-    }
-
     ThreadPool->QueueHead = 0;
     ThreadPool->QueueTail = 0;
 
@@ -49,6 +51,10 @@ b32 WebThreadPoolInit(web_thread_pool *ThreadPool, web_arena *Arena, web_thread_
 
     ThreadPool->QueueCapacity = 128;
     ThreadPool->QueueItems = WEB_ARENA_NEW_MANY(Arena, typeof(*ThreadPool->QueueItems), ThreadPool->QueueCapacity);
+
+    for (uz I = 0; I < ThreadPool->ThreadsCount; ++I) {
+        if (!WebThreadLaunch(&ThreadPool->Threads[I], ThreadPoolWorkerProc, ThreadPool)) return 0;
+    }
 
     return 1;
 }
@@ -112,20 +118,15 @@ void WebThreadPoolTaskInit(web_thread_pool_task *Task,
     Task->Proc = Proc;
     Task->Arg = Arg;
     WebMutexInit(&Task->Mu);
-    Task->Cond = (pthread_cond_t) PTHREAD_COND_INITIALIZER;
+    pthread_cond_init(&Task->Cond, NULL);
 }
 
 void WebThreadPoolTaskWaitUntilCompletion(web_thread_pool_task *Task) {
     WebMutexLock(&Task->Mu);
 
-    if (Task->Completed) {
-        goto Cleanup;
+    while (!Task->Completed) {
+        pthread_cond_wait(&Task->Cond, &Task->Mu.Inner);
     }
 
-    pthread_cond_wait(&Task->Cond, &Task->Mu.Inner);
-
-    Task->Completed = 1;
-
-Cleanup:
     WebMutexUnlock(&Task->Mu);
 }

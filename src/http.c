@@ -56,7 +56,7 @@ static sz HttpsRead(web_https_session *Sess, u8 *Buffer, uz BufferCapacity) {
 
 // TODO(oleh): Get the error string.
 static sz HttpReceive(worker_data *WorkerData, u8 *Buffer, uz BufferCapacity) {
-    if (WorkerData->Server->Context->UseHttps) {
+    if (WorkerData->Context->UseHttps) {
         return HttpsRead(&WorkerData->HttpsSession,
                          Buffer,
                          BufferCapacity);
@@ -382,6 +382,7 @@ static b32 ParseHTTPVersion_Slow(web_string_view Input, web_http_version *Versio
 }
 
 // @Spec(oleh): https://www.rfc-editor.org/info/rfc2616/#section-3.1.
+// TODO(oleh): Check if the version is supported by us or no.
 static b32 ParseHTTPVersion(web_string_view Input, web_http_version *Version) {
     return ParseHTTPVersion_Fast(Input, Version) || ParseHTTPVersion_Slow(Input, Version);
 }
@@ -608,6 +609,44 @@ b32 WebHttpRequestParse(web_arena *Arena, web_string_view Buffer, web_http_reque
     return 1;
 }
 
+web_http_request WebHttpRequestBuild(
+        web_http_context *Context,
+        web_string_view Path,
+        web_http_method Method,
+        web_string_view Body,
+        ...
+) {
+    web_http_headers Headers = {0};
+    WEB_STRING_MAP_INIT(&Context->Arena, &Headers);
+
+    va_list HeaderArgs;
+    va_start(HeaderArgs, Body);
+
+    for (;;) {
+        const char *HeaderName = va_arg(HeaderArgs, const char *);
+        if (HeaderName == NULL) {
+            break;
+        }
+
+        const char *HeaderValue = va_arg(HeaderArgs, const char *);
+        if (HeaderValue == NULL) {
+            WEB_PANIC_FMT("Odd amount of header values passed to %s", __FUNCTION__);
+        }
+
+        WebHttpHeadersAdd(&Context->Arena, &Headers, WEB_SV_LIT(HeaderName), WEB_SV_LIT(HeaderValue));
+    }
+
+    va_end(HeaderArgs);
+
+    return (web_http_request){
+        .Body = Body,
+        .Headers = Headers,
+        .Method = Method,
+        .Path = Path,
+        .Version = Context->HTTPVersion,
+    };
+}
+
 #define CONTENT_LENGTH_HEADER "Content-Length"
 
 static void ParseContentLength(web_http_header Header, s64 *ContentLength) {
@@ -737,7 +776,8 @@ static void HttpRequestSendProc(void *DataPtr) {
     // headers + streamed body.
     while (RequestString.Count > 0) {
         sz N = HttpSend(WorkerData, RequestString);
-        if (N == -1) {
+        if (N < 0) {
+            WEB_LOG(DEBUG, HTTP, "Failed to send data over the connection");
             Result = 0;
             goto End;
         }
@@ -747,6 +787,7 @@ static void HttpRequestSendProc(void *DataPtr) {
     }
 
     if (!HttpResponseParseStreaming(WorkerData, WorkerData->Response)) {
+        WEB_LOG(DEBUG, HTTP, "Failed to parse server's response");
         Result = 0;
         goto End;
     }
@@ -778,7 +819,6 @@ static b32 HeadersContainConnectionClose(const web_http_headers *Headers) {
 
 b32 WebHttpRequestSend(web_http_context *Context,
                        web_string_view Hostname,
-                       u16 Port,
                        web_http_request Request,
                        web_http_response *Response) {
     web_temp Temp = WebGetTempArena();
@@ -793,25 +833,25 @@ b32 WebHttpRequestSend(web_http_context *Context,
 
     const char *HostnameCStr = WebStringViewCloneCStr(&Temp.Arena, Hostname);
 
-    char PortCStr[6] = {0};
-    sprintf(PortCStr, "%hu", Port);
+    int Sock = -1;
 
-    sz Status = getaddrinfo(HostnameCStr, PortCStr, &Hints, &ServerAddr);
+    sz Status = getaddrinfo(HostnameCStr, "80", &Hints, &ServerAddr);
     if (Status != 0) {
-        // FIXME(oleh): Report an error.
+        WEB_LOG_FMT(DEBUG, HTTP, "Call to 'getaddrinfo' failed with error code %ld", Status);
         Result = 0;
         goto End;
     }
 
-    int Sock = socket(ServerAddr->ai_family, ServerAddr->ai_socktype, 0);
+    Sock = socket(ServerAddr->ai_family, ServerAddr->ai_socktype, 0);
     if (Sock == -1) {
-        // FIXME(oleh): Report an error.
+        WEB_LOG_FMT(DEBUG, HTTP, "Call to 'socket' failed: %s", strerror(errno));
         Result = 0;
         goto End;
     }
 
     Status = connect(Sock, ServerAddr->ai_addr, ServerAddr->ai_addrlen);
     if (Status != 0) {
+        WEB_LOG_FMT(DEBUG, HTTP, "Call to 'connect' failed: %s", strerror(errno));
         Result = 0;
         goto End;
     }
@@ -840,7 +880,7 @@ b32 WebHttpRequestSend(web_http_context *Context,
     WorkerData->Request = Request;
     WorkerData->Response = Response;
 
-    web_thread_pool_task *Task = WEB_ARENA_NEW(&Temp.Arena, web_thread_pool_task);
+    web_thread_pool_task *Task = WEB_ARENA_NEW(&Temp.Arena, typeof(*Task));
     WebThreadPoolTaskInit(Task, HttpRequestSendProc, WorkerData);
 
     WebThreadPoolScheduleTask(&Context->ThreadPool, Task);
@@ -860,7 +900,9 @@ End:
         HttpsCloseConnection(&HttpsSession);
     }
 
-    close(Sock);
+    if (Sock != -1) {
+        close(Sock);
+    }
 
     return Result;
 }
@@ -1264,18 +1306,30 @@ static void *NewTaskProc(uz *Size) {
     return Task;
 }
 
-b32 WebHttpContextInit(web_http_context_config *Config, web_http_context *Context) {
-    if (Config->GlobalPoolCapacity <= 0) {
-        Config->GlobalPoolCapacity = HTTP_CONTEXT_ARENA_CAPACITY;
+b32 WebHttpContextInit(web_http_context_config Config, web_http_context *Context) {
+    if (Config.GlobalPoolCapacity <= 0) {
+        Config.GlobalPoolCapacity = HTTP_CONTEXT_ARENA_CAPACITY;
     }
 
-    WebArenaInitChained(&Context->Arena, Config->GlobalPoolCapacity);
+    if (Config.HTTPVersion.Number <= 0) {
+        Config.HTTPVersion.Number = HTTP_1_1;
+    } else if (Config.HTTPVersion.Number > HTTP_1_1) {
+        web_temp Temp = WebGetTempArena();
+        web_string_view VersionString = GetHTTPVersionString(&Temp.Arena, Config.HTTPVersion);
+
+        WEB_LOG_FMT(ERROR, HTTP, "Unsupported HTTP version " WEB_SV_FMT, WEB_SV_ARG(VersionString));
+        return 0;
+    }
+
+    Context->HTTPVersion = Config.HTTPVersion;
+
+    WebArenaInitChained(&Context->Arena, Config.GlobalPoolCapacity);
 
     WebSyncPoolInit(&Context->WorkerPool, NewWorkerDataPoolProc);
     WebSyncPoolInit(&Context->TaskPool, NewTaskProc);
     WebSyncPoolInit(&Context->ResponseContextPool, NewContextPoolProc);
 
-    uz NumThreads = Config->NumThreads || 1;
+    uz NumThreads = Config.NumThreads || 1;
     web_thread_pool_config ThreadPoolConfig = {.NumThreads = NumThreads};
     return WebThreadPoolInit(&Context->ThreadPool, &Context->Arena, &ThreadPoolConfig);
 }

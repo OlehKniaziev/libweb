@@ -183,6 +183,11 @@ static int HttpsAcceptConnection(web_https_provider *Provider, int Sock, web_htt
     WEB_UNREACHABLE();
 }
 
+// TODO(oleh): Get a list of all the headers with list values.
+static b32 IsHeaderValueAList(web_string_view Name) {
+    return WebStringViewEqualCStr(Name, "Connection");
+}
+
 static void InsertPotentiallyCommaSeparatedHeaderValue(
         web_arena *Arena,
         web_http_headers *Headers,
@@ -190,6 +195,11 @@ static void InsertPotentiallyCommaSeparatedHeaderValue(
         web_string_view Value
 ) {
     web_string_view Delim = WEB_SV_LIT(",");
+
+    if (!IsHeaderValueAList(Name)) {
+        WebHttpHeadersAdd(Arena, Headers, Name, Value);
+        return;
+    }
 
     while (Value.Count > 0) {
         web_string_view Part = WebStringViewChop(Value, Delim);
@@ -231,12 +241,7 @@ static sz ParseHeader(
     sz HeaderValueStart = I;
 
     for (I = HeaderValueStart; I < BufferCount; ++I) {
-        u8 Char = Buffer[I];
-        if (IsLWS(Char) || Char == '\r') break;
-    }
-
-    for (; I < BufferCount; ++I) {
-        if (!IsLWS(Buffer[I])) break;
+        if (Buffer[I] == '\r') break;
     }
 
     if (I >= BufferCount) {
@@ -253,6 +258,17 @@ static sz ParseHeader(
     }
 
     *HeaderValue = (web_string_view){.Items = Buffer + HeaderValueStart, .Count = I - HeaderValueStart};
+
+    sz TrailingSpace = 0;
+
+    for (sz I = 0; I < HeaderValue->Count; ++I) {
+        u8 Char = HeaderValue->Items[HeaderValue->Count - 1 - I];
+        if (IsLWS(Char)) {
+            TrailingSpace += 1;
+        }
+    }
+
+    HeaderValue->Count -= TrailingSpace;
 
     return I + 2;
 }
@@ -701,12 +717,12 @@ static b32 HttpResponseParseStreaming(worker_data *WorkerData, web_http_response
     }
 
 ReceiveLoop: ;
-    sz N = HttpReceive(WorkerData, Buffer, BufferCapacity);
-    if (N < 0) {
+    sz Received = HttpReceive(WorkerData, Buffer + ParseOffset, BufferCapacity);
+    if (Received < 0) {
         return 0;
     }
 
-    BufferCount += N;
+    BufferCount += Received;
 
     if (ParsedHeaders) {
         goto ParseBody;
@@ -714,7 +730,7 @@ ReceiveLoop: ;
 
     web_string_view StatusLineSv = {.Items = Buffer + ParseOffset, .Count = BufferCount - ParseOffset};
 
-    N = ParseStatusLine(StatusLineSv,
+    sz N = ParseStatusLine(StatusLineSv,
                         &Version,
                         &Code);
     if (N < 0) {
@@ -758,7 +774,13 @@ ParseBody:
         return 1;
     }
 
-    goto ReceiveLoop;
+    if (Received > 0) {
+        goto ReceiveLoop;
+    }
+
+    WEB_LOG(DEBUG, HTTP, "Body EOF");
+
+    return 0;
 }
 
 // NOTE(oleh): Not sure if it's fine to use temp here for most of the stuff as the temp arena is kinda

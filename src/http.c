@@ -663,7 +663,13 @@ web_http_request WebHttpRequestBuild(
     };
 }
 
+typedef struct {
+    web_string_view Data;
+    web_string_view Extensions;
+} response_chunk;
+
 #define CONTENT_LENGTH_HEADER "Content-Length"
+#define TRANSFER_ENCODING_HEADER "Transfer-Encoding"
 
 static void ParseContentLength(web_http_header Header, s64 *ContentLength) {
     if (Header.Value.Count != 1) {
@@ -691,35 +697,154 @@ Fail:
         *ContentLength = -1;
 }
 
+static b32 HeaderValueContains(web_http_header_value Value, const char *Needle) {
+    for (sz TokenIdx = 0; TokenIdx < Value.Count; ++TokenIdx) {
+        web_string_view ConnectionToken = Value.Items[TokenIdx];
+        if (WebStringViewEqualCStr(ConnectionToken, Needle)) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+typedef enum {
+    PARSE_CHUNK_OK,
+    PARSE_CHUNK_ERROR,
+    PARSE_CHUNK_MORE,
+} parse_chunk_result;
+
+// TODO(oleh): Handle extensions.
+static parse_chunk_result ParseChunk(web_string_view Buffer, response_chunk *Chunk, sz *ChunkSize) {
+    WEB_STRUCT_ZERO(Chunk);
+
+    if (Buffer.Count == 0) {
+        WEB_LOG(DEBUG, HTTP, "Received an empty buffer");
+        return PARSE_CHUNK_ERROR;
+    }
+
+    u32 ChunkLength = 0;
+    s32 NumMatches = sscanf((const char *)Buffer.Items, "%x", &ChunkLength);
+    if (NumMatches != 1) {
+        web_string_view BufferStart = {.Items = Buffer.Items, .Count = WEB_MIN(Buffer.Count, 4)};
+        WEB_LOG_FMT(
+                DEBUG,
+                HTTP,
+                "Failed to read the chunk's length (" WEB_SV_FMT ") as a valid hex integer",
+                WEB_SV_ARG(BufferStart)
+        );
+        return PARSE_CHUNK_ERROR;
+    }
+
+    sz Offset = 0;
+
+    for (; Offset < Buffer.Count; ++Offset) {
+        if (Buffer.Items[Offset] == '\r') break;
+    }
+
+    if (Offset + 1 >= Buffer.Count) {
+        WEB_LOG(DEBUG, HTTP, "EOF while looking for CRLF");
+        return PARSE_CHUNK_ERROR;
+    }
+
+    if (Buffer.Items[Offset + 1] != '\n') {
+        WEB_LOG(DEBUG, HTTP, "Malformed CRLF");
+        return PARSE_CHUNK_ERROR;
+    }
+
+    Offset += 2;
+
+    sz Avail = Buffer.Count - Offset;
+    if (Avail < ChunkLength) {
+        *ChunkSize = ChunkLength;
+        return PARSE_CHUNK_MORE;
+    }
+
+    Chunk->Data.Items = Buffer.Items + Offset;
+    Chunk->Data.Count = ChunkLength;
+
+    if (ChunkLength == 0) {
+        *ChunkSize = Offset;
+        return PARSE_CHUNK_OK;
+    }
+
+    Offset += ChunkLength;
+
+    if (Offset + 1 >= Buffer.Count) {
+        WEB_LOG(DEBUG, HTTP, "EOF while looking for CRLF");
+        return PARSE_CHUNK_ERROR;
+    }
+
+    if (Buffer.Items[Offset] != '\r' || Buffer.Items[Offset + 1] != '\n') {
+        WEB_LOG(DEBUG, HTTP, "Malformed CRLF");
+        return PARSE_CHUNK_ERROR;
+    }
+
+    Offset += 2;
+
+    *ChunkSize = Offset;
+
+    return PARSE_CHUNK_OK;
+}
+
+static web_string_view MergeChunks(u8 *Buffer, sz BufferCount, response_chunk *Chunks, sz ChunksCount) {
+    sz Offset = 0;
+
+    for (sz ChunkIdx = 0; ChunkIdx < ChunksCount; ++ChunkIdx) {
+        response_chunk Chunk = Chunks[ChunkIdx];
+
+        if (Chunk.Data.Count > BufferCount - Offset) {
+            return (web_string_view){0};
+        }
+
+        memcpy(Buffer + Offset, Chunk.Data.Items, Chunk.Data.Count);
+        Offset += Chunk.Data.Count;
+    }
+
+    return (web_string_view){.Items = Buffer, .Count = Offset};
+}
+
+#define MAX_RESPONSE_LENGTH 4 * 1024 * 1024
+
 static b32 HttpResponseParseStreaming(worker_data *WorkerData, web_http_response *Resp) {
+    b32 ParseResult = 0;
+
+#define OK() do { ParseResult = 1; goto ParseSuccess; } while (0)
+#define ERR() do { ParseResult = 0; goto ParseFail; } while (0)
+
+    web_temp Temp = WebGetTempArena();
+
     web_arena *Arena = &WorkerData->Context->Arena;
 
-    web_http_version Version;
-    web_http_response_status Code;
+    web_http_version Version = {0};
+    web_http_response_status Code = 0;
 
     web_http_headers Headers = {0};
     WEB_STRING_MAP_INIT(Arena, &Headers);
 
-    uz BufferCount = 0;
-    uz BufferCapacity = 1024;
-    u8 *Buffer = WEB_ARENA_PUSH_ZERO(Arena, BufferCapacity, 1);
+    WEB_ARRAY_TYPE(response_chunk) ResponseChunks = {0};
+    WEB_ARRAY_INIT(&Temp.Arena, &ResponseChunks);
 
-    uz ParseOffset = 0;
+    uz BufferCount = 0;
+    uz BufferCapacity = MAX_RESPONSE_LENGTH;
+    u8 *Buffer = WebArenaPush(Arena, BufferCapacity, 1);
+
+    sz ParseOffset = 0;
 
     s64 ContentLength = -1;
 
+    b32 ChunkedTransfer = 0;
     b32 ParsedHeaders = 0;
 
+ReceiveLoop: ;
     if (BufferCount >= BufferCapacity) {
-        uz NewCapacity = BufferCapacity << 1;
-        WebArenaRealloc(Arena, Buffer, BufferCapacity, NewCapacity, 1);
-        BufferCapacity = NewCapacity;
+        WEB_LOG(WARN, HTTP, "Response size exceeds maximum configured length");
+        ERR();
     }
 
-ReceiveLoop: ;
-    sz Received = HttpReceive(WorkerData, Buffer + ParseOffset, BufferCapacity);
+    sz Received = HttpReceive(WorkerData, Buffer + BufferCount, BufferCapacity - BufferCount);
     if (Received < 0) {
-        return 0;
+        ERR();
     }
 
     BufferCount += Received;
@@ -730,57 +855,112 @@ ReceiveLoop: ;
 
     web_string_view StatusLineSv = {.Items = Buffer + ParseOffset, .Count = BufferCount - ParseOffset};
 
-    sz N = ParseStatusLine(StatusLineSv,
-                        &Version,
-                        &Code);
-    if (N < 0) {
-        return 0;
+    sz StatusLineLength = ParseStatusLine(
+            StatusLineSv,
+            &Version,
+            &Code
+    );
+    if (StatusLineLength < 0) {
+        ERR();
     }
 
-    ParseOffset += N;
+    ParseOffset += StatusLineLength;
 
     web_string_view HeadersSv = {.Items = Buffer + ParseOffset, .Count = BufferCount - ParseOffset};
-    N = ParseHeaders(Arena, HeadersSv, &Headers);
-    if (N < 0) {
-        return 0;
+    sz HeadersLength = ParseHeaders(Arena, HeadersSv, &Headers);
+    if (StatusLineLength < 0) {
+        ERR();
     }
 
     ParsedHeaders = 1;
 
-    ParseOffset += N;
+    ParseOffset += HeadersLength;
 
+    // TODO(oleh): Probably replace this with lookups.
     WEB_MAP_FOREACH(&Headers, HeaderIdx) {
         web_http_header Header = HeaderAt(&Headers, HeaderIdx);
         if (WebStringViewEqualCStr(Header.Name, CONTENT_LENGTH_HEADER)) {
             ParseContentLength(Header, &ContentLength);
+        } else if (WebStringViewEqualCStr(Header.Name, TRANSFER_ENCODING_HEADER)) {
+            ChunkedTransfer = HeaderValueContains(Header.Value, "chunked");
         }
     }
 
 ParseBody:
+    if (ChunkedTransfer) {
+        web_string_view RawChunk = {.Items = Buffer + ParseOffset, .Count = BufferCount - ParseOffset};
+        response_chunk Chunk = {0};
+        sz ChunkBytesRead = 0;
+        parse_chunk_result Result = ParseChunk(RawChunk, &Chunk, &ChunkBytesRead);
+
+        switch (Result) {
+            case PARSE_CHUNK_OK: {
+                ParseOffset += ChunkBytesRead;
+
+                if (Chunk.Data.Count == 0) {
+                    Resp->Body = MergeChunks(
+                            Buffer + ParseOffset,
+                            BufferCapacity - ParseOffset,
+                            ResponseChunks.Items,
+                            ResponseChunks.Count
+                    );
+
+                    if (Resp->Body.Items == NULL) {
+                        WEB_LOG(ERROR, HTTP, "Not enough memory to merge response chunks");
+                        ERR();
+                    }
+
+                    OK();
+                }
+
+                WEB_ARRAY_PUSH(&Temp.Arena, &ResponseChunks, Chunk);
+                goto ReceiveLoop;
+            }
+            case PARSE_CHUNK_ERROR: {
+                WEB_LOG_FMT(DEBUG, HTTP, "Failed to parse response chunk at offset %ld", ParseOffset);
+                ERR();
+            }
+            case PARSE_CHUNK_MORE: {
+                goto ReceiveLoop;
+            }
+        }
+    }
+
     if (ContentLength < 0) {
         Resp->Body = (web_string_view) {.Items = Buffer + ParseOffset, .Count = BufferCount - ParseOffset};
-        Resp->Headers = Headers;
-        Resp->Version = Version;
-        Resp->Status = Code;
-        return 1;
+        OK();
     }
 
     sz Have = BufferCount - ParseOffset;
     if (Have >= ContentLength) {
         Resp->Body = (web_string_view) {.Items = Buffer + ParseOffset, .Count = ContentLength};
-        Resp->Headers = Headers;
-        Resp->Version = Version;
-        Resp->Status = Code;
-        return 1;
+        OK();
     }
 
-    if (Received > 0) {
-        goto ReceiveLoop;
+    if (Received <= 0) {
+        WEB_LOG(DEBUG, HTTP, "Body EOF");
+        ERR();
     }
 
-    WEB_LOG(DEBUG, HTTP, "Body EOF");
+    goto ReceiveLoop;
 
-    return 0;
+ParseSuccess:
+    Resp->Headers = Headers;
+    Resp->Version = Version;
+    Resp->Status = Code;
+
+ParseFail:
+    if (ParseResult == 0) {
+        web_string_view BufferSv = {.Items = Buffer, .Count = BufferCount};
+        WEB_LOG_FMT(DEBUG, HTTP, "Whole parse buffer: " WEB_SV_FMT, WEB_SV_ARG(BufferSv));
+    }
+
+    WebReturnTempArena(Temp);
+
+    return ParseResult;
+
+#undef OK
+#undef ERR
 }
 
 // NOTE(oleh): Not sure if it's fine to use temp here for most of the stuff as the temp arena is kinda
@@ -829,14 +1009,7 @@ static b32 HeadersContainConnectionClose(const web_http_headers *Headers) {
         return 0;
     }
 
-    for (sz TokenIdx = 0; TokenIdx < ConnectionHeader.Value.Count; ++TokenIdx) {
-        web_string_view ConnectionToken = ConnectionHeader.Value.Items[TokenIdx];
-        if (WebStringViewEqualCStr(ConnectionToken, "close")) {
-            return 1;
-        }
-    }
-
-    return 0;
+    return HeaderValueContains(ConnectionHeader.Value, "close");
 }
 
 b32 WebHttpRequestSend(web_http_context *Context,

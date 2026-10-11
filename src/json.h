@@ -26,12 +26,7 @@ typedef struct {
     sz Capacity;
 } web_json_array;
 
-typedef struct {
-    web_string_view *Keys;
-    web_json_value *Values;
-    sz Count;
-    sz Capacity;
-} web_json_object;
+typedef WEB_MAP_TYPE(web_string_view, web_json_value) web_json_object;
 
 struct web_json_value {
     web_json_value_type Type;
@@ -47,7 +42,30 @@ typedef enum {
     WEB_JSON_ESCAPE_UNICODE = 1 << 0,
 } web_json_flags;
 
-b32 WebJsonParse(web_arena *Arena, web_string_view Input, web_json_value *OutValue);
+typedef void *web_json_reader;
+
+b32 WebJsonParseSimple(web_arena *Arena, web_string_view Input, web_json_value *OutValue);
+
+web_json_reader WebJsonReaderCreate(web_arena *Arena);
+
+b32 WebJsonParse(web_json_reader Reader, web_string_view Input, web_json_value *OutValue);
+
+typedef struct {
+    enum {
+        WEB_JSON_READER_EOF,
+        WEB_JSON_READER_SYNTAX,
+    } Kind;
+
+    struct {
+        s32 Line;
+        s32 Column;
+        s64 ByteOffset;
+    } Location;
+
+    web_string_view Message;
+} web_json_reader_error;
+
+web_json_reader_error WebJsonReaderGetError(web_json_reader Reader);
 
 b32 WebJsonObjectGet(const web_json_object *Object, web_string_view Key, web_json_value *OutValue);
 

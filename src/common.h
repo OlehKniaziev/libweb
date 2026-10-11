@@ -224,7 +224,7 @@ b32 WebReadFullFile(web_arena *Arena, const char *Path, web_string_view *OutCont
 
 #define WEB_ARRAY_PUSH(Arena, Array, Element) do {                          \
         if ((Array)->Count >= (Array)->Capacity) {                      \
-            sz NewCapacity = ((Array)->Capacity + 1) * 2;               \
+            sz NewCapacity = WEB_MAX((Array)->Capacity + 1, (Array)->Count) * 2;               \
             (Array)->Items = WebArenaRealloc((Arena), (Array)->Items, sizeof(*(Array)->Items) * (Array)->Capacity, sizeof(*(Array)->Items) * NewCapacity, alignof(*(Array)->Items)); \
             (Array)->Capacity = NewCapacity;                            \
         }                                                               \
@@ -232,6 +232,10 @@ b32 WebReadFullFile(web_arena *Arena, const char *Path, web_string_view *OutCont
         (Array)->Items[(Array)->Count] = Element;                       \
         ++(Array)->Count;                                               \
     } while (0)
+
+#define WEB_ARRAY_POP(Array) do { \
+    (Array)->Count = WEB_MIN((Array)->Count - 1, 0); \
+} while (0)
 
 // TODO(oleh): Since we know the number of elements in the Rhs array, we can first reserve an
 // exact amount of memory needed for insertion of all of them.
@@ -273,102 +277,102 @@ typedef struct {
 
 #define WEB_MAP_DEFAULT_CAP 11
 
-#define WEB_MAP_INIT_CAP(Arena, Map, _HashP, _EqP, _Cap) do { \
-    typedef typeof(*(Map)->Keys) key_type; \
-    typedef typeof(*(Map)->Values) value_type; \
-    u64 (*HashP)(key_type) = (_HashP); \
-    b32 (*EqP)(key_type, key_type) = (_EqP); \
-    sz InitCapacity = (_Cap); \
-    InitCapacity = InitCapacity > 0 ? InitCapacity : WEB_MAP_DEFAULT_CAP; \
-    (Map)->Capacity = InitCapacity; \
-    (Map)->Count = 0; \
-    (Map)->Keys = WEB_ARENA_NEW_MANY(Arena, key_type, (Map)->Capacity); \
-    (Map)->Values = WEB_ARENA_NEW_MANY(Arena, value_type, (Map)->Capacity); \
-    (Map)->Meta = WEB_ARENA_NEW_MANY(Arena, web_map_meta, (Map)->Capacity); \
-    (Map)->HashProc = HashP; \
-    (Map)->EqProc = EqP; \
+#define WEB_MAP_INIT_CAP(_Arena, _Map, _HashProc, _EqProc, _Cap) do { \
+    typedef typeof(*(_Map)->Keys) _key_type; \
+    typedef typeof(*(_Map)->Values) _value_type; \
+    u64 (*_HashP)(_key_type) = (_HashProc); \
+    b32 (*_EqP)(_key_type, _key_type) = (_EqProc); \
+    sz _InitCapacity = (_Cap); \
+    _InitCapacity = _InitCapacity > 0 ? _InitCapacity : WEB_MAP_DEFAULT_CAP; \
+    (_Map)->Capacity = _InitCapacity; \
+    (_Map)->Count = 0; \
+    (_Map)->Keys = WEB_ARENA_NEW_MANY(_Arena, _key_type, (_Map)->Capacity); \
+    (_Map)->Values = WEB_ARENA_NEW_MANY(_Arena, _value_type, (_Map)->Capacity); \
+    (_Map)->Meta = WEB_ARENA_NEW_MANY(_Arena, web_map_meta, (_Map)->Capacity); \
+    (_Map)->HashProc = _HashP; \
+    (_Map)->EqProc = _EqP; \
 } while (0)
 
-#define WEB_MAP_CAPACITY_STEP(Capacity) ((Capacity + 1) * 3)
+#define WEB_MAP_CAPACITY_STEP(_Cap) ((_Cap + 1) * 3)
 
-#define WEB_MAP_FOREACH(Map, IdxName) for (sz IdxName = 0; IdxName < (Map)->Capacity; ++IdxName) if ((Map)->Meta[IdxName].Flags & WEB_MAP_META_OCCUPIED)
+#define WEB_MAP_FOREACH(_Map, _IdxName) for (sz _IdxName = 0; _IdxName < (_Map)->Capacity; ++_IdxName) if ((_Map)->Meta[_IdxName].Flags & WEB_MAP_META_OCCUPIED)
 
-#define _WEB_MAP_DO_INSERT(Arena, Map, _Key, _Value) do { \
-    typedef typeof(*(Map)->Keys) key_type; \
-    typedef typeof(*(Map)->Values) value_type; \
-    key_type KeyToInsert = (_Key); \
-    value_type ValueToInsert = (_Value); \
-    u64 (*HashProc)(key_type) = (Map)->HashProc; \
-    b32 (*EqProc)(key_type, key_type) = (Map)->EqProc; \
-    u64 Hash = HashProc(KeyToInsert); \
-    sz KeyIdx = (sz)(Hash % (u64)(Map)->Capacity); \
+#define _WEB_MAP_DO_INSERT(_Map, _Key, _Value) do { \
+    typedef typeof(*(_Map)->Keys) _key_type; \
+    typedef typeof(*(_Map)->Values) _value_type; \
+    _key_type _KeyToInsert = (_Key); \
+    _value_type _ValueToInsert = (_Value); \
+    u64 (*_HashProc)(_key_type) = (_Map)->HashProc; \
+    b32 (*_EqProc)(_key_type, _key_type) = (_Map)->EqProc; \
+    u64 _Hash = _HashProc(_KeyToInsert); \
+    sz _KeyIdx = (sz)(_Hash % (u64)(_Map)->Capacity); \
     while (1) { \
-        web_map_meta *Meta = &(Map)->Meta[KeyIdx]; \
-        if (!(Meta->Flags & WEB_MAP_META_OCCUPIED)) { \
-            (Map)->Values[KeyIdx] = ValueToInsert; \
-            (Map)->Keys[KeyIdx] = KeyToInsert; \
-            Meta->Flags |= WEB_MAP_META_OCCUPIED; \
-            (Map)->Count += 1; \
+        web_map_meta *_Meta = &(_Map)->Meta[_KeyIdx]; \
+        if (!(_Meta->Flags & WEB_MAP_META_OCCUPIED)) { \
+            (_Map)->Values[_KeyIdx] = _ValueToInsert; \
+            (_Map)->Keys[_KeyIdx] = _KeyToInsert; \
+            _Meta->Flags |= WEB_MAP_META_OCCUPIED; \
+            (_Map)->Count += 1; \
             break; \
         } \
-        key_type Key = (Map)->Keys[KeyIdx]; \
-        if (EqProc(KeyToInsert, Key)) { \
-            (Map)->Values[KeyIdx] = ValueToInsert; \
+        _key_type _OccupiedKey = (_Map)->Keys[_KeyIdx]; \
+        if (_EqProc(_KeyToInsert, _OccupiedKey)) { \
+            (_Map)->Values[_KeyIdx] = _ValueToInsert; \
             break; \
         } \
-        KeyIdx += 1; \
-        if (KeyIdx >= (Map)->Capacity) KeyIdx = 0; \
+        _KeyIdx += 1; \
+        if (_KeyIdx >= (_Map)->Capacity) _KeyIdx = 0; \
     } \
 } while (0)
 
-#define WEB_MAP_GROW(Arena, Map, _Cap) do { \
-    sz DesiredCapacity = (_Cap); \
-    if (DesiredCapacity <= (Map)->Capacity) break; \
-    typedef typeof(*(Map)->Keys) key_type; \
-    typeof(*(Map)) NewMap = {0}; \
-    WEB_MAP_INIT_CAP(Arena, &NewMap, (u64 (*)(key_type))(Map)->HashProc, (b32 (*)(key_type, key_type))(Map)->EqProc, DesiredCapacity); \
-    WEB_MAP_FOREACH((Map), KeyIdx) { \
-        _WEB_MAP_DO_INSERT(Arena, &NewMap, (Map)->Keys[KeyIdx], (Map)->Values[KeyIdx]); \
+#define WEB_MAP_GROW(_Arena, _Map, _Cap) do { \
+    sz _DesiredCapacity = (_Cap); \
+    if (_DesiredCapacity <= (_Map)->Capacity) break; \
+    typedef typeof(*(_Map)->Keys) _key_type; \
+    typeof(*(_Map)) _NewMap = {0}; \
+    WEB_MAP_INIT_CAP(_Arena, &_NewMap, (u64 (*)(_key_type))(_Map)->HashProc, (b32 (*)(_key_type, _key_type))(_Map)->EqProc, _DesiredCapacity); \
+    WEB_MAP_FOREACH((_Map), _KeyIdx) { \
+        _WEB_MAP_DO_INSERT(&_NewMap, (_Map)->Keys[_KeyIdx], (_Map)->Values[_KeyIdx]); \
     } \
-    *(Map) = NewMap; \
+    *(_Map) = _NewMap; \
 } while (0)
 
 #define WEB_MAP_LOAD_CEILING 70
 
-#define WEB_MAP_INSERT(Arena, Map, _Key, _Value) do { \
-    sz Load = (Map)->Count * 100 / (Map)->Capacity; \
-    if (Load >= WEB_MAP_LOAD_CEILING) { \
-        sz NewCapacity = WEB_MAP_CAPACITY_STEP((Map)->Capacity); \
-        WEB_MAP_GROW(Arena, Map, NewCapacity); \
+#define WEB_MAP_INSERT(_Arena, _Map, _Key, _Value) do { \
+    sz _MapLoad = (_Map)->Count * 100 / (_Map)->Capacity; \
+    if (_MapLoad >= WEB_MAP_LOAD_CEILING) { \
+        sz _NewCapacity = WEB_MAP_CAPACITY_STEP((_Map)->Capacity); \
+        WEB_MAP_GROW(_Arena, _Map, _NewCapacity); \
     } \
-    _WEB_MAP_DO_INSERT(Arena, Map, _Key, _Value); \
+    _WEB_MAP_DO_INSERT(_Map, _Key, _Value); \
 } while (0)
 
-#define WEB_MAP_GET(Map, _Key, _Out) ({ \
-    typedef typeof(*(Map)->Keys) key_type; \
-    typedef typeof(*(Map)->Values) value_type; \
-    u64 (*HashP)(key_type) = (Map)->HashProc; \
-    b32 (*EqP)(key_type, key_type) = (Map)->EqProc; \
-    value_type *OutValue = (_Out); \
-    key_type GetKey = (_Key); \
-    u64 Hash = HashP(GetKey); \
-    sz KeyIdx = (sz)(Hash % (u64)(Map)->Capacity); \
-    sz StartingIdx = KeyIdx; \
-    b32 Result = 0; \
+#define WEB_MAP_GET(_Map, _Key, _Out) ({ \
+    typedef typeof(*(_Map)->Keys) _key_type; \
+    typedef typeof(*(_Map)->Values) _value_type; \
+    u64 (*_HashP)(_key_type) = (_Map)->HashProc; \
+    b32 (*_EqP)(_key_type, _key_type) = (_Map)->EqProc; \
+    _value_type *_OutValue = (_Out); \
+    _key_type _GetKey = (_Key); \
+    u64 _Hash = _HashP(_GetKey); \
+    sz _KeyIdx = (sz)(_Hash % (u64)(_Map)->Capacity); \
+    sz _StartingIdx = _KeyIdx; \
+    b32 _Result = 0; \
     do { \
-        web_map_meta Meta = (Map)->Meta[KeyIdx]; \
-        if (Meta.Flags & WEB_MAP_META_OCCUPIED) { \
-            key_type Key = (Map)->Keys[KeyIdx]; \
-            if (EqP(GetKey, Key)) { \
-                if (OutValue != NULL) *OutValue = (Map)->Values[KeyIdx]; \
-                Result = 1; \
+        web_map_meta _Meta = (_Map)->Meta[_KeyIdx]; \
+        if (_Meta.Flags & WEB_MAP_META_OCCUPIED) { \
+            _key_type _OccupiedKey = (_Map)->Keys[_KeyIdx]; \
+            if (_EqP(_GetKey, _OccupiedKey)) { \
+                if (_OutValue != NULL) *_OutValue = (_Map)->Values[_KeyIdx]; \
+                _Result = 1; \
                 break; \
             } \
         } \
-        KeyIdx += 1; \
-        if (KeyIdx >= (Map)->Capacity) KeyIdx = 0; \
-    } while (KeyIdx != StartingIdx); \
-    Result; \
+        _KeyIdx += 1; \
+        if (_KeyIdx >= (_Map)->Capacity) _KeyIdx = 0; \
+    } while (_KeyIdx != _StartingIdx); \
+    _Result; \
 })
 
 #define WEB_MAP_CONTAINS(Map, Key) WEB_MAP_GET(Map, Key, NULL)
@@ -378,24 +382,24 @@ typedef struct {
 #define WEB_STRING_MAP_INIT_CAP(Arena, Map, Cap) WEB_MAP_INIT_CAP(Arena, Map, WebHashFnv1, WebStringViewEqual, Cap)
 #define WEB_STRING_MAP_INIT(Arena, Map) WEB_STRING_MAP_INIT_CAP(Arena, Map, WEB_MAP_DEFAULT_CAP)
 
-#define WEB_MAP_RESET(Map) do { \
-    WEB_MAP_FOREACH((Map), KeyIdx) { \
-        web_map_meta *Meta = &(Map)->Meta[KeyIdx]; \
-        WEB_STRUCT_ZERO(Meta); \
+#define WEB_MAP_RESET(_Map) do { \
+    WEB_MAP_FOREACH((_Map), _KeyIdx) { \
+        web_map_meta *_Meta = &(_Map)->Meta[_KeyIdx]; \
+        WEB_STRUCT_ZERO(_Meta); \
     } \
-    (Map)->Count = 0; \
+    (_Map)->Count = 0; \
 } while (0)
 
-#define WEB_MAP_COPY(Arena, _Dest, _Src) do { \
-    typeof((_Src)) SrcMap = (_Src); \
-    typeof(SrcMap) DestMap = (_Dest); \
-    memcpy(DestMap, SrcMap, sizeof(*(DestMap))); \
-    DestMap->Keys = WEB_ARENA_NEW_MANY(Arena, typeof(*SrcMap->Keys), SrcMap->Capacity); \
-    WEB_ARENA_COPY_ITEMS(DestMap->Keys, SrcMap->Keys, SrcMap->Capacity); \
-    DestMap->Values = WEB_ARENA_NEW_MANY(Arena, typeof(*SrcMap->Values), SrcMap->Capacity); \
-    WEB_ARENA_COPY_ITEMS(DestMap->Values, SrcMap->Values, SrcMap->Capacity); \
-    DestMap->Meta = WEB_ARENA_NEW_MANY(Arena, typeof(*SrcMap->Meta), SrcMap->Capacity); \
-    WEB_ARENA_COPY_ITEMS(DestMap->Meta, SrcMap->Meta, SrcMap->Capacity); \
+#define WEB_MAP_COPY(_Arena, _Dest, _Src) do { \
+    typeof((_Src)) _SrcMap = (_Src); \
+    typeof(_SrcMap) _DestMap = (_Dest); \
+    memcpy(_DestMap, _SrcMap, sizeof(*(_DestMap))); \
+    _DestMap->Keys = WEB_ARENA_NEW_MANY(_Arena, typeof(*_SrcMap->Keys), _SrcMap->Capacity); \
+    WEB_ARENA_COPY_ITEMS(_DestMap->Keys, _SrcMap->Keys, _SrcMap->Capacity); \
+    _DestMap->Values = WEB_ARENA_NEW_MANY(_Arena, typeof(*_SrcMap->Values), _SrcMap->Capacity); \
+    WEB_ARENA_COPY_ITEMS(_DestMap->Values, _SrcMap->Values, _SrcMap->Capacity); \
+    _DestMap->Meta = WEB_ARENA_NEW_MANY(_Arena, typeof(*_SrcMap->Meta), _SrcMap->Capacity); \
+    WEB_ARENA_COPY_ITEMS(_DestMap->Meta, _SrcMap->Meta, _SrcMap->Capacity); \
 } while (0)
 
 #ifdef __cplusplus

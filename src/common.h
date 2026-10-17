@@ -234,7 +234,7 @@ b32 WebReadFullFile(web_arena *Arena, const char *Path, web_string_view *OutCont
     } while (0)
 
 #define WEB_ARRAY_POP(Array) do { \
-    (Array)->Count = WEB_MIN((Array)->Count - 1, 0); \
+    (Array)->Count = WEB_MAX((Array)->Count - 1, 0); \
 } while (0)
 
 // TODO(oleh): Since we know the number of elements in the Rhs array, we can first reserve an

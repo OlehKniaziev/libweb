@@ -183,9 +183,27 @@ static int HttpsAcceptConnection(web_https_provider *Provider, int Sock, web_htt
     WEB_UNREACHABLE();
 }
 
+static const char *ListValueHeaderNamesItems[] = {
+    "Connection",
+};
+
+// @Sync(oleh): Need some sort of guard here when the tests are paralellized.
+static WEB_ARRAY_TYPE(const char *) ListValueHeaderNames = {
+    .Items = ListValueHeaderNamesItems,
+    .Count = WEB_ARRAY_COUNT(ListValueHeaderNamesItems),
+    .Capacity = WEB_ARRAY_COUNT(ListValueHeaderNamesItems),
+};
+
 // TODO(oleh): Get a list of all the headers with list values.
 static b32 IsHeaderValueAList(web_string_view Name) {
-    return WebStringViewEqualCStr(Name, "Connection");
+    for (sz HeaderNameIdx = 0; HeaderNameIdx < ListValueHeaderNames.Count; ++HeaderNameIdx) {
+        const char *ListValueHeaderName = ListValueHeaderNames.Items[HeaderNameIdx];
+        if (WebStringViewEqualCStr(Name, ListValueHeaderName)) {
+            return 1;
+        }
+    }
+
+    return 0;
 }
 
 static void InsertPotentiallyCommaSeparatedHeaderValue(
@@ -1599,35 +1617,49 @@ WEB_DEFINE_TEST(ParseRequestLineOK) {
 }
 
 WEB_DEFINE_TEST(ParseHeaderListValue) {
+    const char *ListHeaderNames[] = {"H1", "H2", "H3"};
+
+    for (sz HeaderIdx = 0; HeaderIdx < WEB_ARRAY_COUNT(ListHeaderNames); ++HeaderIdx) {
+        const char *H = ListHeaderNames[HeaderIdx];
+        WEB_ARRAY_PUSH(&Runner->Arena, &ListValueHeaderNames, H);
+    }
+
     web_string_view Request = WEB_SV_LIT("H1: a,b,c\r\nH2: a\r\nH2: b\r\nH2: c\r\nH3: a\r\n\r\n");
 
     web_http_headers Headers = {0};
     WEB_STRING_MAP_INIT(&Runner->Arena, &Headers);
 
-    WEB_T_NEQUAL(ParseHeaders(&Runner->Arena, Request, &Headers), -1);
+    sz HeadersLength = ParseHeaders(&Runner->Arena, Request, &Headers);
 
-    web_http_header_value Value = {0};
-    WEB_T_TRUE(WEB_MAP_GET(&Headers, WEB_SV_LIT("H1"), &Value));
+    for (sz HeaderIdx = 0; HeaderIdx < WEB_ARRAY_COUNT(ListHeaderNames); ++HeaderIdx) {
+        WEB_ARRAY_POP(&ListValueHeaderNames);
+    }
 
-    WEB_T_EQUAL(Value.Count, 3);
+    WEB_T_NEQUAL(HeadersLength, -1);
 
-    WEB_T_EQUAL(Value.Items[0], WEB_SV_LIT("a"));
-    WEB_T_EQUAL(Value.Items[1], WEB_SV_LIT("b"));
-    WEB_T_EQUAL(Value.Items[2], WEB_SV_LIT("c"));
+    web_http_header Header = {0};
+    WEB_T_TRUE(WebHttpHeadersGet(&Headers, WEB_SV_LIT("H1"), &Header));
 
-    WEB_T_TRUE(WEB_MAP_GET(&Headers, WEB_SV_LIT("H2"), &Value));
+    WEB_T_EQUAL(Header.Name, WEB_SV_LIT("H1"));
+    WEB_T_EQUAL(Header.Value.Count, 3);
 
-    WEB_T_EQUAL(Value.Count, 3);
+    WEB_T_EQUAL(Header.Value.Items[0], WEB_SV_LIT("a"));
+    WEB_T_EQUAL(Header.Value.Items[1], WEB_SV_LIT("b"));
+    WEB_T_EQUAL(Header.Value.Items[2], WEB_SV_LIT("c"));
 
-    WEB_T_EQUAL(Value.Items[0], WEB_SV_LIT("a"));
-    WEB_T_EQUAL(Value.Items[1], WEB_SV_LIT("b"));
-    WEB_T_EQUAL(Value.Items[2], WEB_SV_LIT("c"));
+    WEB_T_TRUE(WebHttpHeadersGet(&Headers, WEB_SV_LIT("H2"), &Header));
 
-    WEB_T_TRUE(WEB_MAP_GET(&Headers, WEB_SV_LIT("H3"), &Value));
+    WEB_T_EQUAL(Header.Value.Count, 3);
 
-    WEB_T_EQUAL(Value.Count, 1);
+    WEB_T_EQUAL(Header.Value.Items[0], WEB_SV_LIT("a"));
+    WEB_T_EQUAL(Header.Value.Items[1], WEB_SV_LIT("b"));
+    WEB_T_EQUAL(Header.Value.Items[2], WEB_SV_LIT("c"));
 
-    WEB_T_EQUAL(Value.Items[0], WEB_SV_LIT("a"));
+    WEB_T_TRUE(WebHttpHeadersGet(&Headers, WEB_SV_LIT("H3"), &Header));
+
+    WEB_T_EQUAL(Header.Value.Count, 1);
+
+    WEB_T_EQUAL(Header.Value.Items[0], WEB_SV_LIT("a"));
 }
 
 WEB_DEFINE_TEST(ShouldCloseConnection) {

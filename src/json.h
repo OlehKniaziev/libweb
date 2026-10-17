@@ -59,7 +59,6 @@ typedef struct {
     struct {
         s32 Line;
         s32 Column;
-        s64 ByteOffset;
     } Location;
 
     web_string_view Message;

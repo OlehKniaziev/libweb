@@ -4,22 +4,35 @@
 #include "test.h"
 #include "utf.h"
 
-typedef enum {
-    TOKEN_LBRACKET,
-    TOKEN_RBRACKET,
-    TOKEN_LBRACE,
-    TOKEN_RBRACE,
-    TOKEN_STRING,
-    TOKEN_NUMBER,
-    TOKEN_NULL,
-    TOKEN_TRUE,
-    TOKEN_FALSE,
-    TOKEN_COLON,
-    TOKEN_COMMA,
+#define ENUM_TOKEN_TYPES                        \
+    X(LBRACKET)                                 \
+    X(RBRACKET)                             \
+    X(LBRACE)                               \
+    X(RBRACE)                               \
+    X(STRING)                               \
+    X(NUMBER)                               \
+    X(NULL)                                 \
+    X(TRUE)                                 \
+    X(FALSE)                                \
+    X(COLON)                                \
+    X(COMMA) \
+    X(ILLEGAL) \
+    X(UNCLOSED_STRING)
 
-    TOKEN_ILLEGAL,
-    TOKEN_UNCLOSED_STRING,
+typedef enum {
+#define X(T) TOKEN_##T,
+    ENUM_TOKEN_TYPES
+#undef X
 } json_token_type;
+
+static const char *TokenTypeName(json_token_type TT) {
+#define X(T) case TOKEN_##T: return #T;
+    switch (TT) {
+        ENUM_TOKEN_TYPES
+    }
+#undef X
+    WEB_UNREACHABLE();
+}
 
 typedef struct {
     json_token_type Type;
@@ -58,12 +71,33 @@ static b32 ReadEscapedCodePoint(json_reader *Reader, web_code_point *Out) {
     return 1;
 }
 
+#define BAIL_FMT(Fmt, ...) do {                                         \
+        Reader->Error.Message = WebArenaFormat(Reader->Arena, (Fmt), __VA_ARGS__); \
+        Reader->Error.Location.Line = 1;                                \
+        Reader->Error.Location.Column = 1;                              \
+        for (sz CharIdx = 0; CharIdx < Reader->Input.Count; ++CharIdx) { \
+            u8 Char = Reader->Input.Items[CharIdx];                     \
+            if (Char == '\n') {                                         \
+                Reader->Error.Location.Line += 1;                                \
+                Reader->Error.Location.Column = 1;                               \
+            } else {                                                    \
+                Reader->Error.Location.Column += 1;                              \
+            }                                                           \
+        }                                                               \
+        return 0;                                                       \
+    } while (0)
+
+#define BAIL(Msg) BAIL_FMT("%s", (Msg))
+
 static b32 JsonNextToken(json_reader *Reader, json_token *OutToken) {
     for (; Reader->Position < Reader->Input.Count; ++Reader->Position) {
-        if (!JsonIsWhitespace(Reader->Input.Items[Reader->Position])) break;
+        u8 Char = Reader->Input.Items[Reader->Position];
+        if (!JsonIsWhitespace(Char)) break;
     }
 
-    if (Reader->Position >= Reader->Input.Count) return 0;
+    if (Reader->Position >= Reader->Input.Count) {
+        BAIL("Reader EOF");
+    }
 
     u8 CurrentChar = Reader->Input.Items[Reader->Position];
 
@@ -169,7 +203,7 @@ static b32 JsonNextToken(json_reader *Reader, json_token *OutToken) {
 
                     web_code_point CodePoint = 0;
                     if (!ReadEscapedCodePoint(Reader, &CodePoint)) {
-                        return 0;
+                        BAIL("Failed to read an escaped codepoint");
                     }
 
                     if (CodePoint >= WEB_UTF16_LEADING_SURROGATE_MIN && CodePoint <= WEB_UTF16_LEADING_SURROGATE_MAX) {
@@ -178,12 +212,12 @@ static b32 JsonNextToken(json_reader *Reader, json_token *OutToken) {
                         web_code_point TrailingSurrogate = 0;
 
                         if (!ReadEscapedCodePoint(Reader, &TrailingSurrogate)) {
-                            return 0;
+                            BAIL("Failed to read an escaped codepoint");
                         }
 
                         if (TrailingSurrogate < WEB_UTF16_TRAILING_SURROGATE_MIN ||
                             TrailingSurrogate > WEB_UTF16_TRAILING_SURROGATE_MAX) {
-                            return 0;
+                            BAIL_FMT("Trailing surrogate value out of range: %u", TrailingSurrogate);
                         }
 
                         CodePoint = (((LeadingSurrogate - WEB_UTF16_LEADING_SURROGATE_MIN) << 10)
@@ -213,7 +247,9 @@ static b32 JsonNextToken(json_reader *Reader, json_token *OutToken) {
 
                     break;
                 }
-                default: return 0;
+                default: {
+                    BAIL("Unrecognized escape sequence");
+                }
                 }
             } else {
                 WEB_ARRAY_PUSH(Reader->Arena, &String, Char);
@@ -297,7 +333,7 @@ static b32 JsonParseValue(json_reader *Reader, web_json_value *OutValue) {
         f64 NumberValue;
 
         if (!ParseF64(Token.Value, &NumberValue)) {
-            return 0;
+            BAIL_FMT("Invalid token: " WEB_SV_FMT, WEB_SV_ARG(Token.Value));
         }
 
         OutValue->Type = JSON_NUMBER;
@@ -342,7 +378,7 @@ static b32 JsonParseValue(json_reader *Reader, web_json_value *OutValue) {
             if (Token.Type == TOKEN_RBRACKET) break;
             if (Token.Type == TOKEN_COMMA) goto ParseElement;
 
-            return 0;
+            BAIL_FMT("Expected a comma, got %s instead", TokenTypeName(Token.Type));
         }
 
         OutValue->Type = JSON_ARRAY;
@@ -362,12 +398,16 @@ static b32 JsonParseValue(json_reader *Reader, web_json_value *OutValue) {
 
         ParseKeyValue:
             if (!JsonNextToken(Reader, &Token)) return 0;
-            if (Token.Type != TOKEN_STRING) return 0;
+            if (Token.Type != TOKEN_STRING) {
+                BAIL_FMT("Expected the key in an object to be string, got %s", TokenTypeName(Token.Type));
+            }
 
             web_string_view EntryKey = Token.Value;
 
             if (!JsonNextToken(Reader, &Token)) return 0;
-            if (Token.Type != TOKEN_COLON) return 0;
+            if (Token.Type != TOKEN_COLON) {
+                BAIL_FMT("Expected a colon after an object key, got %s", TokenTypeName(Token.Type));
+            }
 
             web_json_value EntryValue;
 
@@ -379,7 +419,7 @@ static b32 JsonParseValue(json_reader *Reader, web_json_value *OutValue) {
             if (Token.Type == TOKEN_RBRACE) break;
             if (Token.Type == TOKEN_COMMA) goto ParseKeyValue;
 
-            return 0;
+            BAIL_FMT("Expected a comma, got %s instead", TokenTypeName(Token.Type));
         }
 
         OutValue->Type = JSON_OBJECT;
@@ -387,7 +427,7 @@ static b32 JsonParseValue(json_reader *Reader, web_json_value *OutValue) {
         return 1;
     }
     default: {
-        return 0;
+        BAIL_FMT("Unexpected token %s", TokenTypeName(Token.Type));
     }
     }
 }
@@ -673,7 +713,7 @@ WEB_DEFINE_TEST(JsonDecoding_Escaping) {
     web_string_view Input = WEB_SV_LIT("\"\\\"v\\ra\\nl\\tu\\be\\f\\\\\\\"\"");
     web_json_value Value = {};
 
-    WEB_T_TRUE(WebJsonParse(&Runner->Arena, Input, &Value));
+    WEB_T_TRUE(WebJsonParseSimple(&Runner->Arena, Input, &Value));
     WEB_T_TRUE(Value.Type == JSON_STRING);
 
     web_string_view S = Value.String;
@@ -683,9 +723,9 @@ WEB_DEFINE_TEST(JsonDecoding_Escaping) {
 
 WEB_DEFINE_TEST(JsonDecoding_Unicode) {
     web_string_view Input = WEB_SV_LIT("\"\\u0430\\u0431\"");
-    web_json_value Value = {};
+    web_json_value Value = {0};
 
-    WEB_T_TRUE(WebJsonParse(&Runner->Arena, Input, &Value));
+    WEB_T_TRUE(WebJsonParseSimple(&Runner->Arena, Input, &Value));
     WEB_T_TRUE(Value.Type == JSON_STRING);
 
     web_string_view S = Value.String;
@@ -694,7 +734,7 @@ WEB_DEFINE_TEST(JsonDecoding_Unicode) {
 
     Input = WEB_SV_LIT("\"\\uD83D\\uDE80\"");
 
-    WEB_T_TRUE(WebJsonParse(&Runner->Arena, Input, &Value));
+    WEB_T_TRUE(WebJsonParseSimple(&Runner->Arena, Input, &Value));
     WEB_T_TRUE(Value.Type == JSON_STRING);
 
     S = Value.String;
@@ -702,3 +742,16 @@ WEB_DEFINE_TEST(JsonDecoding_Unicode) {
     WEB_T_EQUAL(S, WEB_SV_LIT("🚀"));
 }
 
+WEB_DEFINE_TEST(JsonDecoding_EOF) {
+    web_string_view Input = WEB_SV_LIT("{\"a\":");
+    web_json_value Value = {0};
+
+    web_json_reader Reader = WebJsonReaderCreate(&Runner->Arena);
+
+    WEB_T_FALSE(WebJsonParse(Reader, Input, &Value));
+
+    web_json_reader_error Err = WebJsonReaderGetError(Reader);
+    WEB_T_EQUAL(Err.Location.Line, 1);
+    WEB_T_EQUAL(Err.Location.Column, Input.Count + 1);
+    WEB_T_EQUAL(Err.Message, WEB_SV_LIT("Reader EOF"));
+}

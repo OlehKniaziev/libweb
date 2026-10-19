@@ -1074,7 +1074,13 @@ b32 WebHttpRequestSend(web_http_context *Context,
     if (Context->UseHttps) {
         Status = HttpsConnect(Context->HttpsProvider, Sock, &HttpsSession);
 
-        if (Status <= 0) WEB_TODO();
+        if (Status <= 0) {
+            const char *ErrorString = HttpsErrorString(Context->HttpsProvider, Status);
+            WEB_LOG_FMT(DEBUG, HTTP, "Failed to create an HTTPS session: %s", ErrorString);
+
+            Result = 0;
+            goto End;
+        }
     }
 
     web_http_headers NewHeaders = {0};

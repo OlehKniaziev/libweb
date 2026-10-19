@@ -291,7 +291,6 @@ static sz ParseHeader(
     return I + 2;
 }
 
-// TODO(oleh): This should be more strict, i.e. now it does not check that the ':' is before the CRLF.
 static sz ParseHeaders(web_arena *Arena,
                        web_string_view Buffer,
                        web_http_headers *Headers) {
@@ -894,14 +893,14 @@ ReceiveLoop: ;
 
     ParseOffset += HeadersLength;
 
-    // TODO(oleh): Probably replace this with lookups.
-    WEB_MAP_FOREACH(&Headers, HeaderIdx) {
-        web_http_header Header = HeaderAt(&Headers, HeaderIdx);
-        if (WebStringViewEqualCStr(Header.Name, CONTENT_LENGTH_HEADER)) {
-            ParseContentLength(Header, &ContentLength);
-        } else if (WebStringViewEqualCStr(Header.Name, TRANSFER_ENCODING_HEADER)) {
-            ChunkedTransfer = HeaderValueContains(Header.Value, "chunked");
-        }
+    web_http_header Header = HeaderAt(&Headers, HeaderIdx);
+
+    if (WebHttpHeadersGet(&Headers, WEB_SV_LIT(CONTENT_LENGTH_HEADER), &Header)) {
+        ParseContentLength(Header, &ContentLength);
+    }
+
+    if (WebHttpHeadersGet(&Headers, WEB_SV_LIT(TRANSFER_ENCODING_HEADER), &Header)) {
+        ChunkedTransfer = HeaderValueContains(Header.Value, "chunked");
     }
 
 ParseBody:
@@ -981,8 +980,6 @@ ParseFail:
 #undef ERR
 }
 
-// NOTE(oleh): Not sure if it's fine to use temp here for most of the stuff as the temp arena is kinda
-// expected to be small.
 static void HttpRequestSendProc(void *DataPtr) {
     worker_data *WorkerData = (worker_data *) DataPtr;
 
@@ -992,8 +989,6 @@ static void HttpRequestSendProc(void *DataPtr) {
 
     web_string_view RequestString = HttpRequestToString(&Temp.Arena, WorkerData->Request);
 
-    // FIXME(oleh): Refer to the spec to see if this is actually a valid thing to do or it should be
-    // headers + streamed body.
     while (RequestString.Count > 0) {
         sz N = HttpSend(WorkerData, RequestString);
         if (N < 0) {
@@ -1028,6 +1023,10 @@ static b32 HeadersContainConnectionClose(const web_http_headers *Headers) {
     }
 
     return HeaderValueContains(ConnectionHeader.Value, "close");
+}
+
+static const char *HttpsErrorString(web_https_provider *Provider, int Error) {
+    return Provider->GetErrorString(Provider->Data, Error);
 }
 
 b32 WebHttpRequestSend(web_http_context *Context,

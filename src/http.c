@@ -1077,11 +1077,28 @@ b32 WebHttpRequestSend(web_http_context *Context,
         if (Status <= 0) WEB_TODO();
     }
 
+    web_http_headers NewHeaders = {0};
+
+#define COPY_HEADERS() do { \
+    if (NewHeaders.Keys == NULL) { \
+        WEB_MAP_COPY(&Context->Arena, &NewHeaders, &Request.Headers); \
+    } \
+    } while (0)
+
     // TODO(oleh): Use a functional map impl here to avoid copies.
     if (!HeadersContainConnectionClose(&Request.Headers)) {
-        web_http_headers NewHeaders = {0};
-        WEB_MAP_COPY(&Context->Arena, &NewHeaders, &Request.Headers);
+        COPY_HEADERS();
         WebHttpHeadersAdd(&Context->Arena, &NewHeaders, WEB_SV_LIT("Connection"), WEB_SV_LIT("close"));
+    }
+
+    if (Request.Body.Count != 0 && !WebHttpHeadersGet(&Request.Headers, WEB_SV_LIT("Content-Length"), NULL)) {
+        web_string_view ContentLength = WebArenaFormat(&Context->Arena, "%ld", Request.Body.Count);
+
+        COPY_HEADERS();
+        WebHttpHeadersAdd(&Context->Arena, &NewHeaders, WEB_SV_LIT("Content-Length"), ContentLength);
+    }
+
+    if (NewHeaders.Keys != NULL) {
         Request.Headers = NewHeaders;
     }
 
@@ -1290,6 +1307,11 @@ HandleRequest: ;
 
         if (ContentTypeToAdd.Items != NULL) {
             WebHttpHeadersAdd(&Ctx->Arena, &Ctx->ResponseHeaders, WEB_SV_LIT("Content-Type"), ContentTypeToAdd);
+        }
+
+        if (Ctx->Content.Count != 0 && !WebHttpHeadersGet(&Ctx->ResponseHeaders, WEB_SV_LIT("Content-Length"), NULL)) {
+            web_string_view ContentLength = WebArenaFormat(&Ctx->Arena, "%ld", Ctx->Content.Count);
+            WebHttpHeadersAdd(&Ctx->Arena, &Ctx->ResponseHeaders, WEB_SV_LIT("Content-Length"), ContentLength);
         }
 
         web_dynamic_string ResponseHeadersString;

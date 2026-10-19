@@ -1280,6 +1280,18 @@ HandleRequest: ;
         const char *ReasonPhrase = GetHTTPResponseStatusReasonPhrase(ResponseStatus);
         web_string_view VersionString = GetHTTPVersionString(&Ctx->Arena, HttpRequest.Version);
 
+        web_string_view ContentTypeToAdd = {0};
+
+        if (Ctx->ContentType != NULL) {
+            ContentTypeToAdd = WEB_SV_LIT(Ctx->ContentType);
+        } else if (!WebHttpHeadersGet(&Ctx->ResponseHeaders, WEB_SV_LIT("Content-Type"), NULL)) {
+            ContentTypeToAdd = WEB_SV_LIT("application/octet-stream");
+        }
+
+        if (ContentTypeToAdd.Items != NULL) {
+            WebHttpHeadersAdd(&Ctx->Arena, &Ctx->ResponseHeaders, WEB_SV_LIT("Content-Type"), ContentTypeToAdd);
+        }
+
         web_dynamic_string ResponseHeadersString;
         WEB_ARRAY_INIT(&Ctx->Arena, &ResponseHeadersString);
 
@@ -1308,7 +1320,6 @@ HandleRequest: ;
     web_dynamic_string HeadersString = {0};
     HttpHeadersFormat(&Ctx->Arena, &HeadersString, Ctx->ResponseHeaders);
 
-    // TODO(oleh): No handler found, just give em 404!
     web_string_view ResponseString = WebArenaFormat(&Ctx->Arena,
                                                     WEB_SV_FMT " %u %s\r\n" WEB_SV_FMT "\r\n" WEB_SV_FMT,
                                                     WEB_SV_ARG(VersionString),
@@ -1576,8 +1587,9 @@ void WebHttpContextAddHeader(web_http_response_context *Ctx, web_string_view Nam
     WebHttpHeadersAdd(&Ctx->Arena, &Ctx->ResponseHeaders, Name, Value);
 }
 
-void WebHttpResponseWrite(web_http_response_context *Ctx, web_string_view Response) {
+void WebHttpResponseWrite(web_http_response_context *Ctx, web_string_view Response, const char *ContentType) {
     Ctx->Content = Response;
+    Ctx->ContentType = ContentType;
 }
 
 // Tests

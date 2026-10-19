@@ -192,13 +192,13 @@ typedef struct {
     web_arena Arena;
     web_http_request Request;
     web_http_headers ResponseHeaders;
+    const char *ContentType;
     web_string_view Content;
 } web_http_response_context;
 
 typedef web_http_response_status (*web_http_request_handler)(web_http_response_context *);
 
 typedef struct {
-    // TODO(oleh): Probably introduce a thread pool and accepting socket fd here.
     web_string_view *HandlersPaths;
     web_http_request_handler *Handlers;
     uz HandlersCount;
@@ -216,7 +216,15 @@ typedef struct {
 b32 WebHttpContextInit(web_http_context_config Config, web_http_context *Context);
 b32 WebHttpServerInit(web_http_context *Context, web_http_server *Server);
 
-void WebHttpResponseWrite(web_http_response_context *Context, web_string_view Body);
+void WebHttpResponseWrite(web_http_response_context *Context, web_string_view Body, const char *MimeType);
+
+static inline void WebHttpResponseWriteHTML(web_http_response_context *Context, web_string_view Body) {
+    return WebHttpResponseWrite(Context, Body, "text/html");
+}
+
+static inline void WebHttpResponseWriteJSON(web_http_response_context *Context, web_string_view Body) {
+    return WebHttpResponseWrite(Context, Body, "application/json");
+}
 
 void WebHttpServerStart(web_http_server *Server, u16 Port);
 void WebHttpServerAttachHandler(web_http_server *Server, const char *Path, web_http_request_handler WebHandler);

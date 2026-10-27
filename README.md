@@ -7,5 +7,5 @@ A C library for writing modern, simple web applications.
 - A multithreaded HTTP server and client (**NOTE**: not 100% spec compliant)
 - HTTPS support with OpenSSL or a custom TLS implementation
 
-## Examples
-For examples on how to use the HTTP(S) capabilities see the `examples/` directory.
+## How to use it
+See the `examples/` directory for short list of small self-contained examples.

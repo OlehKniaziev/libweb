@@ -3,20 +3,19 @@
 
 #include "threadpool.h"
 
-typedef void *(*web_sync_pool_new_proc)(uz *Size);
-
-typedef struct web_sync_pool_node {
-    struct web_sync_pool_node *Next;
-    u8 Item[];
-} web_sync_pool_node;
+typedef void * web_sync_pool_node;
 
 typedef struct {
-    web_sync_pool_new_proc NewProc;
-    web_sync_pool_node *Head;
+    web_arena *Arena;
+    web_sync_pool_node Head;
+    sz AllocSize;
+    sz AllocAlign;
     web_mutex Mu;
 } web_sync_pool;
 
-void WebSyncPoolInit(web_sync_pool *Pool, web_sync_pool_new_proc NewProc);
+#define WEB_SYNC_POOL_INIT_T(Pool, Arena, Type) WebSyncPoolInit((Pool), (Arena), sizeof(Type), alignof(Type))
+
+void WebSyncPoolInit(web_sync_pool *Pool, web_arena *Arena, sz Size, sz Align);
 
 void *WebSyncPoolAlloc(web_sync_pool *Pool);
 

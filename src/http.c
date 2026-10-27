@@ -65,11 +65,6 @@ static sz HttpReceive(worker_data *WorkerData, u8 *Buffer, uz BufferCapacity) {
     }
 }
 
-static web_http_header HeaderAt(web_http_headers *Headers, sz Idx) {
-    WEB_ASSERT(Idx < Headers->Capacity);
-    return (web_http_header){.Name = Headers->Keys[Idx], .Value = Headers->Values[Idx]};
-}
-
 static void HttpHeadersFormat(web_arena *Arena, web_dynamic_string *String, web_http_headers Headers) {
     WEB_MAP_FOREACH(&Headers, HeaderIdx) {
         web_string_view HeaderName = Headers.Keys[HeaderIdx];
@@ -893,7 +888,7 @@ ReceiveLoop: ;
 
     ParseOffset += HeadersLength;
 
-    web_http_header Header = HeaderAt(&Headers, HeaderIdx);
+    web_http_header Header = {0};
 
     if (WebHttpHeadersGet(&Headers, WEB_SV_LIT(CONTENT_LENGTH_HEADER), &Header)) {
         ParseContentLength(Header, &ContentLength);
@@ -1025,8 +1020,19 @@ static b32 HeadersContainConnectionClose(const web_http_headers *Headers) {
     return HeaderValueContains(ConnectionHeader.Value, "close");
 }
 
-static const char *HttpsErrorString(web_https_provider *Provider, int Error) {
-    return Provider->GetErrorString(Provider->Data, Error);
+static const char *HttpsGetErrorString(web_https_provider *Provider, int Error) {
+    switch (Provider->Type) {
+    WEB_CASE_PROVIDER_OPENSSL({
+        uz SslError = ERR_get_error();
+        return ERR_error_string(SslError, NULL);
+    })
+    case WEB_HTTPS_PROVIDER_CUSTOM: {
+        web_https_custom_provider *Custom = (web_https_custom_provider *) Provider->Data;
+        return Custom->VTable.GetErrorString(Custom->Data, Error);
+    }
+    }
+
+    WEB_UNREACHABLE();
 }
 
 b32 WebHttpRequestSend(web_http_context *Context,
@@ -1074,7 +1080,7 @@ b32 WebHttpRequestSend(web_http_context *Context,
         Status = HttpsConnect(Context->HttpsProvider, Sock, &HttpsSession);
 
         if (Status <= 0) {
-            const char *ErrorString = HttpsErrorString(Context->HttpsProvider, Status);
+            const char *ErrorString = HttpsGetErrorString(Context->HttpsProvider, Status);
             WEB_LOG_FMT(DEBUG, HTTP, "Failed to create an HTTPS session: %s", ErrorString);
 
             Result = 0;
@@ -1275,6 +1281,11 @@ static void ServerWorker(void *Arg) {
 HandleRequest: ;
     web_http_response_context *Ctx = WebSyncPoolAlloc(&Data->Context->ResponseContextPool);
 
+    web_arena Zero = {0};
+    if (memcmp(&Zero, &Ctx->Arena, sizeof(Zero)) == 0) {
+        WebArenaInitFixed(&Ctx->Arena, DEFAULT_REQUEST_ARENA_CAPACITY);
+    }
+
     WebArenaReset(&Ctx->Arena);
     WEB_STRING_MAP_INIT(&Ctx->Arena, &Ctx->ResponseHeaders);
     WEB_STRUCT_ZERO(&Ctx->Content);
@@ -1388,21 +1399,6 @@ CloseConnection:
     }
 
     close(Data->Sock);
-}
-
-static const char *HttpsGetErrorString(web_https_provider *Provider, int Error) {
-    switch (Provider->Type) {
-    WEB_CASE_PROVIDER_OPENSSL({
-        uz SslError = ERR_get_error();
-        return ERR_error_string(SslError, NULL);
-    })
-    case WEB_HTTPS_PROVIDER_CUSTOM: {
-        web_https_custom_provider *Custom = (web_https_custom_provider *) Provider->Data;
-        return Custom->VTable.GetErrorString(Custom->Data, Error);
-    }
-    }
-
-    WEB_UNREACHABLE();
 }
 
 void WebHttpServerStart(web_http_server *Server, u16 Port) {
@@ -1533,30 +1529,6 @@ static void HttpsInit(web_https_provider *Provider) {
     WEB_UNREACHABLE();
 }
 
-static void *NewWorkerDataPoolProc(uz *Size) {
-    *Size = sizeof(worker_data);
-    // FIXME(oleh): Replace this asap.
-    return malloc(*Size);
-}
-
-static void *NewContextPoolProc(uz *Size) {
-    *Size = sizeof(web_http_response_context);
-    // FIXME(oleh): Replace this asap #2.
-    web_http_response_context *ResponseContext = malloc(*Size);
-    WEB_STRUCT_ZERO(ResponseContext);
-    WebArenaInitFixed(&ResponseContext->Arena, DEFAULT_REQUEST_ARENA_CAPACITY);
-    return ResponseContext;
-}
-
-static void *NewTaskProc(uz *Size) {
-    web_thread_pool_task *Task;
-    *Size = sizeof(*Task);
-    // FIXME(oleh): Replace this asap #3.
-    Task = malloc(*Size);
-    WEB_STRUCT_ZERO(Task);
-    return Task;
-}
-
 b32 WebHttpContextInit(web_http_context_config Config, web_http_context *Context) {
     if (Config.GlobalPoolCapacity <= 0) {
         Config.GlobalPoolCapacity = HTTP_CONTEXT_ARENA_CAPACITY;
@@ -1576,9 +1548,9 @@ b32 WebHttpContextInit(web_http_context_config Config, web_http_context *Context
 
     WebArenaInitChained(&Context->Arena, Config.GlobalPoolCapacity);
 
-    WebSyncPoolInit(&Context->WorkerPool, NewWorkerDataPoolProc);
-    WebSyncPoolInit(&Context->TaskPool, NewTaskProc);
-    WebSyncPoolInit(&Context->ResponseContextPool, NewContextPoolProc);
+    WEB_SYNC_POOL_INIT_T(&Context->WorkerPool, &Context->Arena, worker_data);
+    WEB_SYNC_POOL_INIT_T(&Context->TaskPool, &Context->Arena, web_thread_pool_task);
+    WEB_SYNC_POOL_INIT_T(&Context->ResponseContextPool, &Context->Arena, web_http_response_context);
 
     uz NumThreads = Config.NumThreads || 1;
     web_thread_pool_config ThreadPoolConfig = {.NumThreads = NumThreads};

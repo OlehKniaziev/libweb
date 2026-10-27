@@ -3,7 +3,7 @@
 #include "../src/log.h"
 
 web_http_response_status RootHandler(web_http_response_context *Ctx) {
-    WebHttpResponseWrite(Ctx, Ctx->Request.Body);
+    WebHttpResponseWrite(Ctx, Ctx->Request.Body, NULL);
     return HTTP_STATUS_OK;
 }
 

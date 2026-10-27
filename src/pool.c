@@ -1,41 +1,50 @@
 #include "pool.h"
 
-void WebSyncPoolInit(web_sync_pool *Pool, web_sync_pool_new_proc NewProc) {
+typedef struct sync_pool_node_header {
+    struct sync_pool_node_header *Next;
+} sync_pool_node_header;
+
+void WebSyncPoolInit(web_sync_pool *Pool, web_arena *Arena, sz Size, sz Align) {
     WEB_STRUCT_ZERO(Pool);
-    Pool->NewProc = NewProc;
+    Pool->Arena = Arena;
+    Pool->AllocSize = Size;
+    Pool->AllocAlign = Align;
     WebMutexInit(&Pool->Mu);
 }
 
 void *WebSyncPoolAlloc(web_sync_pool *Pool) {
     WebMutexLock(&Pool->Mu);
 
-    web_sync_pool_node *Node = NULL;
+    web_sync_pool_node Node = NULL;
 
     if (Pool->Head == NULL) {
-        uz ItemSize = 0;
-        // FIXME(oleh): Avoid the double alloc.
-        void *ItemData = Pool->NewProc(&ItemSize);
-        // TODO(oleh): Replace this malloc by injecting an arena or something.
-        Node = malloc(sizeof(web_sync_pool_node) + ItemSize);
-        WEB_STRUCT_ZERO(Node);
-        memcpy(Node->Item, ItemData, ItemSize);
+        sz NodeAllocSize = sizeof(sync_pool_node_header) + Pool->AllocSize;
+        NodeAllocSize = WebAlignForward(NodeAllocSize, Pool->AllocAlign);
+
+        Node = WEB_ARENA_PUSH_ZERO(Pool->Arena, NodeAllocSize, 1);
+
         goto Cleanup;
     }
 
     Node = Pool->Head;
-    Pool->Head = Pool->Head->Next;
+    Pool->Head = ((sync_pool_node_header *)Pool->Head)->Next;
 
 Cleanup:
     WebMutexUnlock(&Pool->Mu);
-    return Node->Item;
+
+    sz DataOffset = WebAlignForward(sizeof(sync_pool_node_header), Pool->AllocAlign);
+    return Node + DataOffset;
 }
 
 void WebSyncPoolFree(web_sync_pool *Pool, void *Item) {
     WebMutexLock(&Pool->Mu);
 
-    web_sync_pool_node *Node = (web_sync_pool_node *)((u8 *)Item - sizeof(Node->Next));
-    Node->Next = Pool->Head;
-    Pool->Head = Node;
+    sz HeaderOffset = -sizeof(sync_pool_node_header);
+    HeaderOffset += sizeof(sync_pool_node_header) - WebAlignForward(sizeof(sync_pool_node_header), Pool->AllocAlign);
+
+    sync_pool_node_header *Header = (sync_pool_node_header *)(Item + HeaderOffset);
+    Header->Next = Pool->Head;
+    Pool->Head = Header;
 
     WebMutexUnlock(&Pool->Mu);
 }
